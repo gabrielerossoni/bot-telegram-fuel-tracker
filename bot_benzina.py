@@ -588,7 +588,7 @@ async def cors_middleware(request, handler):
         return web.Response(status=200, headers={
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, ngrok-skip-browser-warning",
         })
     
     response = await handler(request)
@@ -631,9 +631,18 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             "_Usa la Dashboard per personalizzare e salvare nel tuo telefono!_",
             parse_mode=ParseMode.MARKDOWN
         )
-    elif text == "📖 Aiuto":
-        await cmd_help(update, context)
-    
+    elif text == "📍 Invia Posizione":
+        # Questo capita spesso su Telegram Desktop (PC)
+        await update.message.reply_text(
+            "💻 *Ehi, sembra che tu sia da PC!*\n\n"
+            "Telegram Desktop non permette l'invio della posizione GPS via pulsante.\n\n"
+            "📍 *Puoi risolvere così:*\n"
+            "1. Scrivi le coordinate a mano (es: `45.4, 9.2`)\n"
+            "2. Usa la *Mappa* dalla Dashboard\n"
+            "3. Inviaci una posizione fissata (📎 -> Posizione)",
+            parse_mode=ParseMode.MARKDOWN
+        )
+
     # Riconoscimento manuale coordinate (es. "45.12, 9.34")
     elif "," in text:
         try:

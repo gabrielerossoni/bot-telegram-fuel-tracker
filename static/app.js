@@ -8,11 +8,16 @@ let userSettings = {
     raggio_km: localStorage.getItem('range') || '10'
 };
 
-// Configurazione Backend (GitHub Pages)
-// Se sei su GitHub Pages, usa l'indirizzo assoluto del tuo server.
-const BACKEND_URL = window.location.origin.includes('github.io') 
-    ? 'https://unraked-uneverted-aline.ngrok-free.dev' 
-    : ''; // Vuoto significa stesso server (locale)
+// Configurazione Dinamica Backend
+// 1. Cerca il parametro 'api' nell'URL (es. ?api=https://mio-server.com)
+// 2. Se non c'è, e siamo su GitHub, usa un placeholder (va sostituito!)
+// 3. Se siamo in locale, usa lo stesso server
+const urlParams = new URLSearchParams(window.location.search);
+const apiParam = urlParams.get('api');
+
+const BACKEND_URL = apiParam 
+    ? apiParam 
+    : (window.location.origin.includes('github.io') ? 'https://unraked-uneverted-aline.ngrok-free.dev' : '');
 
 tg.expand();
 tg.ready();
@@ -109,7 +114,11 @@ async function fetchData(lat, lon) {
             raggio_km: userSettings.raggio_km
         });
 
-        const response = await fetch(`${BACKEND_URL}/api/prices?${query}`);
+        const response = await fetch(`${BACKEND_URL}/api/prices?${query}`, {
+            headers: {
+                'ngrok-skip-browser-warning': 'true'
+            }
+        });
         const data = await response.json();
 
         if (data.error) throw new Error(data.error);
