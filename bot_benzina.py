@@ -445,15 +445,18 @@ async def genera_e_invia_report(bot, chat_id, cfg):
 
         # Invio Foto + Testo
         if img_path and os.path.exists(img_path):
-            with open(img_path, "rb") as photo:
-                await bot.send_photo(
-                    chat_id=chat_id,
-                    photo=photo,
-                    caption=testo,
-                    parse_mode=ParseMode.MARKDOWN,
-                    reply_markup=InlineKeyboardMarkup(buttons) if buttons else None
-                )
-            os.remove(img_path)
+            try:
+                with open(img_path, "rb") as photo:
+                    await bot.send_photo(
+                        chat_id=chat_id,
+                        photo=photo,
+                        caption=testo,
+                        parse_mode=ParseMode.MARKDOWN,
+                        reply_markup=InlineKeyboardMarkup(buttons) if buttons else None
+                    )
+            finally:
+                if os.path.exists(img_path):
+                    os.remove(img_path)
         else:
             await bot.send_message(chat_id=chat_id, text=testo, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -551,12 +554,14 @@ async def cmd_carburanti(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Gestisce i click sui pulsanti del menu testuale."""
-    text = update.message.text
+    """Gestisce i click sui pulsanti del menu testuale o coordinate manuali."""
+    text = str(update.message.text).strip()
+    chat_id = update.effective_chat.id
+    
     if text == "⛽ Prezzi Vicini":
         await cmd_prezzi(update, context)
     elif text == "⚙️ Impostazioni":
-        cfg = get_user_cfg(update.effective_chat.id)
+        cfg = get_user_cfg(chat_id)
         modo = "Self" if cfg["self_service"] else "Servito"
         await update.message.reply_text(
             "⚙️ *Le tue Preferenze*\n\n"
@@ -569,6 +574,19 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
     elif text == "📖 Aiuto":
         await cmd_help(update, context)
+    
+    # Riconoscimento manuale coordinate (es. "45.12, 9.34")
+    elif "," in text:
+        try:
+            lat_s, lon_s = text.split(",")
+            lat, lon = float(lat_s.strip()), float(lon_s.strip())
+            if -90 <= lat <= 90 and -180 <= lon <= 180:
+                db.create_or_update_user(chat_id, lat=lat, lon=lon)
+                await update.message.reply_text(f"✅ Posizione impostata manualmente: `{lat}, {lon}`")
+            else:
+                raise ValueError()
+        except:
+            pass # Non è una coordinata, ignora
 
 
 
@@ -625,6 +643,12 @@ def main() -> None:
     if not BOT_TOKEN or len(BOT_TOKEN) < 20:
         print("⚠️  Imposta BOT_TOKEN nel file .env!")
         raise SystemExit(1)
+
+    # Pulizia vecchi file CSV di cache se presenti (SaaS 3.0 non li usa più)
+    for f in ["anagrafica_cache.csv", "prezzi_cache.csv"]:
+        if os.path.exists(f): 
+            try: os.remove(f)
+            except: pass
 
     print("\n" + "═"*45)
     print("  🚀  BOT BENZINA SaaS v3.0  🚀")
