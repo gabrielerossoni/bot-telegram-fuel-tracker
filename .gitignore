@@ -1,6 +1,8 @@
 # Segreti — MAI committare!
 .env
 
+.history
+
 # Cache dati MASE
 *_cache.csv
 
