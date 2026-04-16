@@ -727,6 +727,7 @@ def main() -> None:
     print("═"*45)
     print("  Dashboard: http://localhost:8080")
     print("  Status:    On-Demand & No Database")
+    print(f"  Web App:   {os.environ.get('WEBAPP_URL', 'NON IMPOSTATO')}")
     print("═"*45)
 
     # Costruisce l'applicazione
