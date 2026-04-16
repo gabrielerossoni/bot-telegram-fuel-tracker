@@ -2,31 +2,59 @@
 <html lang="it">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Benzina Pro Dashboard</title>
-    <!-- Telegram WebApp SDK -->
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Fuel Dash</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <link rel="stylesheet" href="style.css">
 </head>
-<body class="loading">
-    
+<body>
+
+    <!-- Overlay Loader -->
     <div id="loader" class="loader-container">
         <div class="spinner"></div>
-        <p>Caricamento prezzi...</p>
-        <!-- Dashboard Header -->
-        <header class="glass-card header">
-            <div class="header-content">
-                <h1>⛽ Prezzi Vicini</h1>
-                <p id="fuel-type-display">Carburante: Benzina</p>
-            </div>
-            <button class="settings-btn" id="open-settings">⚙️</button>
-        </header>
+        <p>Prezzi in tempo reale...</p>
+    </div>
 
-        <!-- Settings Panel (Hidden by default) -->
-        <div id="settings-panel" class="glass-card settings-panel hidden">
+    <!-- Layout Principale -->
+    <main class="app-layout">
+        
+        <!-- Mappa (Fissa in alto) -->
+        <section id="map-section">
+            <div id="map"></div>
+            
+            <header class="glass-header">
+                <div class="header-main">
+                    <h1>⛽ Prezzi Vicini</h1>
+                    <span id="update-badge" class="badge">LIVE</span>
+                </div>
+                <button id="open-settings" class="icon-btn">⚙️</button>
+            </header>
+        </section>
+
+        <!-- Sezione Inferiore: Classifica e Comandi -->
+        <section id="content-section" class="glass-panel">
+            <div class="drag-handle"></div>
+            
+            <div class="content-header">
+                <h3>🏆 Migliori Prezzi</h3>
+                <p id="fuel-type-display">Benzina • 10km</p>
+            </div>
+
+            <div id="ranking-list" class="station-list">
+                <!-- Card generate dinamicamente da app.js -->
+            </div>
+        </section>
+    </main>
+
+    <!-- Settings Overlay (Hidden) -->
+    <div id="settings-panel" class="settings-overlay hidden">
+        <div class="settings-content glass-card">
             <h3>⚙️ Impostazioni</h3>
+            
             <div class="setting-item">
                 <label>Carburante</label>
                 <select id="fuel-select">
@@ -36,44 +64,17 @@
                     <option value="Metano">Metano</option>
                 </select>
             </div>
-            <div class="setting-item">
-                <label>Modalità</label>
-                <select id="service-select">
-                    <option value="true">Self Service</option>
-                    <option value="false">Servito</option>
-                </select>
-            </div>
+
             <div class="setting-item">
                 <label>Raggio (km)</label>
                 <input type="range" id="range-slider" min="5" max="50" step="5" value="10">
                 <span id="range-val">10km</span>
             </div>
-            <button id="save-settings" class="btn-primary">Salva e Aggiorna</button>
+
+            <button id="save-settings" class="btn-primary">Aggiorna Mappa</button>
+            <button id="close-settings" class="btn-secondary">Chiudi</button>
         </div>
-            <span id="update-badge" class="badge">Live</span>
-        </div>
-    </header>
-
-    <main>
-        <!-- Map Section -->
-        <section id="map-container" class="glass-card">
-            <div id="map"></div>
-        </section>
-
-        <!-- Filters Section -->
-        <section class="filters-row">
-            <div id="fuel-type" class="glass-pill">Benzina</div>
-            <div id="service-type" class="glass-pill">Self</div>
-        </section>
-
-        <!-- List Section -->
-        <section id="price-list">
-            <h2 class="section-title">Distributori Vicini</h2>
-            <div id="stations-container">
-                <!-- Data will be injected here -->
-            </div>
-        </section>
-    </main>
+    </div>
 
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
