@@ -23,8 +23,16 @@ python bot_benzina.py
 
 ```env
 BOT_TOKEN=il_tuo_token_qui
-WEBAPP_URL=https://tua-app.ngrok-free.app
+WEBAPP_URL=https://tuo-utente.github.io/tuo-repo  # Se usi GitHub Pages
 ```
+
+## 🚀 Deployment (Frontend su GitHub Pages)
+
+Questa versione supporta il **decoupling**: puoi ospitare la Mini App su GitHub Pages e il bot su un server separato.
+
+1.  **Backend (Bot)**: Ospita `bot_benzina.py` su Render/Railway/VPS. Il server ha il supporto **CORS** attivo per dialogare con GitHub.
+2.  **Frontend (Mini App)**: Carica la cartella `static/` su GitHub Pages. 
+3.  **Configurazione**: Nel file `static/app.js`, imposta la variabile `BACKEND_URL` con l'indirizzo del tuo server.
 
 ## 📁 Struttura
 

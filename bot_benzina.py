@@ -581,12 +581,25 @@ async def web_index(request):
     """Serve l'interfaccia della Web App."""
     return web.FileResponse('static/index.html')
 
+@web.middleware
+async def cors_middleware(request, handler):
+    """Aggiunge header CORS per permettere a GitHub Pages di comunicare con il backend."""
+    if request.method == "OPTIONS":
+        return web.Response(status=200, headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+        })
+    
+    response = await handler(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    return response
+
 async def start_web_server():
     """Avvia il server web aiohttp in background."""
-    app = web.Application()
-    app.router.add_get('/', web_index) # Route specifica per la home
+    app = web.Application(middlewares=[cors_middleware])
+    app.router.add_get('/', web_index) 
     app.router.add_get('/api/prices', web_api_prices)
-    # Serve i file statici dalla cartella 'static'
     app.router.add_static('/', path='static', name='static')
     
     runner = web.AppRunner(app)
