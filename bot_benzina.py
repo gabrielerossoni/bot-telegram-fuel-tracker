@@ -85,7 +85,7 @@ import pandas as pd
 import pytz
 import requests
 from aiohttp import web
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo, MenuButtonWebApp
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -441,8 +441,9 @@ async def genera_e_invia_report(bot, chat_id, cfg):
 # ══════════════════════════════════════════════════════════════════
 
 MAIN_MENU = ReplyKeyboardMarkup([
-    [KeyboardButton("⛽ Prezzi Vicini", request_location=False)],
-    [KeyboardButton("📍 Invia Posizione attuale", request_location=True)],
+    [KeyboardButton("⛽ Prezzi Vicini")],
+    [KeyboardButton("🚀 Apri Dashboard", web_app=WebAppInfo(url=os.environ.get("WEBAPP_URL", "")))],
+    [KeyboardButton("📍 Invia Posizione", request_location=True)],
     [KeyboardButton("⚙️ Impostazioni"), KeyboardButton("📖 Aiuto")]
 ], resize_keyboard=True)
 
@@ -674,6 +675,17 @@ async def run_once():
 async def on_startup(app: Application):
     """Callback eseguito all'avvio del bot."""
     await start_web_server()
+    
+    # Imposta il Menu Button (quello a sinistra del campo testo)
+    url = os.environ.get("WEBAPP_URL")
+    if url:
+        try:
+            await app.bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(text="Mappa", web_app=WebAppInfo(url=url))
+            )
+            log.info("✅ Menu Button configurato con successo")
+        except Exception as e:
+            log.error("❌ Errore configurazione Menu Button: %s", e)
 
 def main() -> None:
     # Gestione modalità CLI
