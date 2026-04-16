@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Benzina Pro Dashboard</title>
+    <!-- Telegram WebApp SDK -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="loading">
+    
+    <div id="loader" class="loader-container">
+        <div class="spinner"></div>
+        <p>Caricamento prezzi...</p>
+    </div>
+
+    <header class="glass-header">
+        <div class="header-content">
+            <h1 id="user-title">Benzina Pro</h1>
+            <span id="update-badge" class="badge">Live</span>
+        </div>
+    </header>
+
+    <main>
+        <!-- Map Section -->
+        <section id="map-container" class="glass-card">
+            <div id="map"></div>
+        </section>
+
+        <!-- Filters Section -->
+        <section class="filters-row">
+            <div id="fuel-type" class="glass-pill">Benzina</div>
+            <div id="service-type" class="glass-pill">Self</div>
+        </section>
+
+        <!-- List Section -->
+        <section id="price-list">
+            <h2 class="section-title">Distributori Vicini</h2>
+            <div id="stations-container">
+                <!-- Data will be injected here -->
+            </div>
+        </section>
+    </main>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

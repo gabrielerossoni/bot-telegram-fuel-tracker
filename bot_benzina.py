@@ -76,14 +76,16 @@ import io
 import logging
 import math
 import os
+import hmac
+import hashlib
+import json
 from datetime import datetime, time as dtime
 
 import pandas as pd
 import pytz
 import requests
-import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from aiohttp import web
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -351,49 +353,43 @@ def trova_stazioni_vicine(
 # Medaglie/numeri fino a 10 stazioni (espandibile)
 _MEDAGLIE = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
 
-def genera_infografica(top_stazioni: pd.DataFrame, carburante: str, chat_id: int):
-    """Genera una card grafica riassuntiva dei prezzi migliori."""
-    if top_stazioni.empty: return None
+def genera_messaggio_premium(top_stazioni: pd.DataFrame, cfg: dict, data_str: str) -> tuple[str, list]:
+    """Crea un messaggio elegante e i relativi pulsanti interattivi."""
+    if top_stazioni.empty: 
+        return "❌ Nessun prezzo trovato nei paraggi.", []
     
-    file_path = f"report_{chat_id}.png"
-    plt.figure(figsize=(8, 5))
-    plt.axis('off')
+    modo = "Self" if cfg["self_service"] else "Servito"
+    testo = [
+        f"⛽ *{cfg['carburante'].upper()}* • {modo}",
+        f"📍 _Raggio: {cfg['raggio_km']}km • {data_str}_",
+        "─" * 15,
+        ""
+    ]
     
-    # Background color e stile
-    plt.gcf().set_facecolor('#1e1e1e')
+    buttons = []
+    # Pulsante per aprire la Mini App Dashboard
+    url_dashboard = os.environ.get("WEBAPP_URL")
+    if url_dashboard:
+        buttons.append([InlineKeyboardButton("🚀 Apri Dashboard Mappa", web_app=WebAppInfo(url=url_dashboard))])
     
-    y_pos = 0.85
-    plt.text(0.5, 0.95, f"REPORT {carburante.upper()}", color='white', 
-             fontsize=22, weight='bold', ha='center', va='center')
-    plt.text(0.5, 0.88, "Top 3 Distributori più economici", color='#aaaaaa', 
-             fontsize=12, ha='center', va='center')
-    
-    colors = ['#FFD700', '#C0C0C0', '#CD7F32'] # Oro, Argento, Bronzo
-    
-    for i, (_, row) in enumerate(top_stazioni.head(3).iterrows()):
-        nome = str(row.get("nome impianto") or row.get("gestore") or "N/D").strip()[:30]
+    for i, (_, row) in enumerate(top_stazioni.iterrows()):
+        brand = str(row.get("bandiera") or "Generico").strip().upper()
         prezzo = float(row["prezzo"])
-        brand = str(row.get("bandiera") or "stazione").strip()
+        dist = float(row["distanza_km"])
+        lat, lon = row["_lat"], row["_lon"]
+        emoji = get_brand_emoji(brand)
         
-        # Disegna Box
-        rect = plt.Rectangle((0.1, y_pos - 0.2), 0.8, 0.18, color='#2d2d2d', 
-                             ec=colors[i], lw=2, transform=plt.gca().transAxes)
-        plt.gca().add_patch(rect)
+        # Formattazione riga
+        medaglia = _MEDAGLIE[i] if i < len(_MEDAGLIE) else "•"
+        testo.append(f"{medaglia} *{prezzo:.3f} €/L* — {emoji} {brand}")
+        testo.append(f"   └ 📏 {dist:.1f} km")
         
-        # Testo
-        plt.text(0.15, y_pos - 0.08, f"{i+1}. {brand.upper()}", color='white', 
-                 fontsize=14, weight='bold', transform=plt.gca().transAxes)
-        plt.text(0.15, y_pos - 0.14, nome, color='#aaaaaa', 
-                 fontsize=10, transform=plt.gca().transAxes)
-        plt.text(0.85, y_pos - 0.12, f"{prezzo:.3f}€/L", color=colors[i], 
-                 fontsize=18, weight='bold', ha='right', transform=plt.gca().transAxes)
-        
-        y_pos -= 0.22
+        # Pulsanti navigazione per i primi 3
+        if i < 3:
+            maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+            buttons.append([InlineKeyboardButton(f"📍 Vai da {brand} (#{i+1})", url=maps_url)])
 
-    # Salva
-    plt.savefig(file_path, bbox_inches='tight', dpi=100, facecolor='#1e1e1e')
-    plt.close()
-    return file_path
+    return "\n".join(testo), buttons
 
 
 
@@ -402,69 +398,35 @@ def genera_infografica(top_stazioni: pd.DataFrame, carburante: str, chat_id: int
 # ══════════════════════════════════════════════════════════════════
 
 async def genera_e_invia_report(bot, chat_id, cfg):
-    """Pipeline completa: scarica, elabora e invia il report con infografica."""
+    """Pipeline completa: scarica, elabora e invia il report interattivo."""
     try:
         anagrafica, prezzi = scarica_dati()
         stazioni = trova_stazioni_vicine(anagrafica, prezzi, cfg)
         
-        ora = datetime.now(TZ_ROMA).strftime("%H:%M")
-        data = datetime.now(TZ_ROMA).strftime("%d/%m")
-        modo = "Self" if cfg["self_service"] else "Servito"
+        data_str = datetime.now(TZ_ROMA).strftime("%d/%m")
         
         if stazioni.empty:
             await bot.send_message(chat_id=chat_id, text="❌ Nessun prezzo trovato in zona.")
             return
 
         top = stazioni.head(cfg["top_n"])
-        media = stazioni["prezzo"].mean()
         minimo = stazioni["prezzo"].min()
 
-        # Genera Infografica (solo se ci sono dati)
-        img_path = genera_infografica(top, cfg["carburante"], chat_id)
+        # Genera Messaggio Premium
+        testo, buttons = genera_messaggio_premium(top, cfg, data_str)
         
-        # Testo report
-        testo = (
-            f"⛽ *SaaS DASHBOARD* • {data}\n"
-            f"🏷 `{cfg['carburante'].upper()}` • {modo}\n\n"
+        await bot.send_message(
+            chat_id=chat_id, 
+            text=testo, 
+            parse_mode=ParseMode.MARKDOWN, 
+            reply_markup=InlineKeyboardMarkup(buttons)
         )
-
-        buttons = []
-        for i, (_, row) in enumerate(top.iterrows()):
-            brand = str(row.get("bandiera") or "").strip()
-            prezzo = float(row["prezzo"])
-            dist = float(row["distanza_km"])
-            lat, lon = row["_lat"], row["_lon"]
-            
-            emoji = get_brand_emoji(brand)
-            status = "🔥" if prezzo < cfg["soglia_alert"] else "✅" if prezzo <= media else "⚖️"
-            testo += f"{_MEDAGLIE[i] if i < 10 else '•'} *{prezzo:.3f} €/L* {status}\n   {emoji} ({dist:.1f} km)\n"
-            
-            if i < 3:
-                maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-                buttons.append([InlineKeyboardButton(f"📍 {i+1}. Vai da {brand if brand else 'lui'}", url=maps_url)])
-
-        # Invio Foto + Testo
-        if img_path and os.path.exists(img_path):
-            try:
-                with open(img_path, "rb") as photo:
-                    await bot.send_photo(
-                        chat_id=chat_id,
-                        photo=photo,
-                        caption=testo,
-                        parse_mode=ParseMode.MARKDOWN,
-                        reply_markup=InlineKeyboardMarkup(buttons) if buttons else None
-                    )
-            finally:
-                if os.path.exists(img_path):
-                    os.remove(img_path)
-        else:
-            await bot.send_message(chat_id=chat_id, text=testo, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(buttons))
 
         # Alert Prezzo Bersaglio
         if minimo <= cfg["soglia_alert"]:
             await bot.send_message(
                 chat_id=chat_id,
-                text=f"🔔 *ALERT PREZZO BERSAGLIO!*\nAbbiamo trovato {cfg['carburante']} a *{minimo:.3f} €/L*, che è pari o sotto la tua soglia di {cfg['soglia_alert']:.2f}€!",
+                text=f"🔔 *ALERT PREZZO BERSAGLIO!*\n{cfg['carburante']} trovato a *{minimo:.3f} €/L*!",
                 parse_mode=ParseMode.MARKDOWN
             )
             
@@ -553,6 +515,84 @@ async def cmd_carburanti(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
 
+# ══════════════════════════════════════════════════════════════════
+#  SERVER WEB APP (API per la Dashboard)
+# ══════════════════════════════════════════════════════════════════
+
+def verify_telegram_init_data(init_data: str) -> dict:
+    """Valida i dati provenienti dalla Web App per sicurezza."""
+    if not init_data: return None
+    try:
+        from urllib.parse import parse_qs, unquote
+        parsed = {k: v[0] for k, v in parse_qs(init_data).items()}
+        hash_check = parsed.pop('hash', None)
+        
+        # Crea stringa di controllo
+        data_check_string = "\n".join([f"{k}={v}" for k, v in sorted(parsed.items())])
+        
+        # Crea chiave segreta (HMAC-SHA256 del token con "WebAppData")
+        secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
+        calculated_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+        
+        if calculated_hash == hash_check:
+            user_data = json.loads(parsed['user'])
+            return user_data
+    except Exception as e:
+        log.error("Errore validazione TWA: %s", e)
+    return None
+
+async def web_api_prices(request):
+    """Endpoint che restituisce i prezzi JSON per la Web App."""
+    init_data = request.query.get('initData')
+    user = verify_telegram_init_data(init_data)
+    
+    if not user:
+        return web.json_response({"error": "Unauthorized"}, status=401)
+    
+    chat_id = user['id']
+    cfg = get_user_cfg(chat_id)
+    
+    if cfg["lat"] == 0:
+        return web.json_response({"error": "Posizione non impostata"}, status=400)
+        
+    try:
+        anagrafica, prezzi = scarica_dati()
+        stazioni = trova_stazioni_vicine(anagrafica, prezzi, cfg)
+        
+        # Converti DataFrame in lista di dizionari "puliti"
+        stations_list = []
+        for _, row in stazioni.head(15).iterrows():
+            stations_list.append({
+                "nome_impianto": row.get("nome impianto", ""),
+                "bandiera": row.get("bandiera", ""),
+                "prezzo": float(row["prezzo"]),
+                "distanza_km": float(row["distanza_km"]),
+                "_lat": float(row["_lat"]),
+                "_lon": float(row["_lon"])
+            })
+            
+        return web.json_response({
+            "config": cfg,
+            "stations": stations_list
+        })
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+async def start_web_server():
+    """Avvia il server web aiohttp in background."""
+    app = web.Application()
+    app.router.add_get('/api/prices', web_api_prices)
+    # Serve i file statici dalla cartella 'static'
+    app.router.add_static('/', path='static', name='static', show_index=True)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', 8080)
+    await site.start()
+    log.info("🌐 Web App Server attivo su http://localhost:8080")
+
+
+
 async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Gestisce i click sui pulsanti del menu testuale o coordinate manuali."""
     text = str(update.message.text).strip()
@@ -587,8 +627,6 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 raise ValueError()
         except:
             pass # Non è una coordinata, ignora
-
-
 
 # ══════════════════════════════════════════════════════════════════
 #  JOB SCHEDULATO — report automatico mattutino
@@ -633,6 +671,10 @@ async def run_once():
     async with bot:
         await genera_e_invia_report(bot, int(chat_id), cfg)
 
+async def on_startup(app: Application):
+    """Callback eseguito all'avvio del bot."""
+    await start_web_server()
+
 def main() -> None:
     # Gestione modalità CLI
     if "--report" in sys.argv:
@@ -644,40 +686,36 @@ def main() -> None:
         print("⚠️  Imposta BOT_TOKEN nel file .env!")
         raise SystemExit(1)
 
-    # Pulizia vecchi file CSV di cache se presenti (SaaS 3.0 non li usa più)
+    # Pulizia vecchi file CSV
     for f in ["anagrafica_cache.csv", "prezzi_cache.csv"]:
         if os.path.exists(f): 
             try: os.remove(f)
             except: pass
 
     print("\n" + "═"*45)
-    print("  🚀  BOT BENZINA SaaS v3.0  🚀")
+    print("  🚀  BOT BENZINA SaaS v3.1  🚀")
     print("═"*45)
-    print("  Database: SQLite (bot_data.db)")
-    print("  Status:   Multi-user enabled")
+    print("  Dashboard: http://localhost:8080")
+    print("  Status:    Premium UI & Mini App")
     print("═"*45)
-    print("  Bot in ascolto... premi Ctrl+C per uscire.\n")
 
-
-    # Costruisce l'applicazione con job_queue abilitata
+    # Costruisce l'applicazione
     app = (
         Application.builder()
         .token(BOT_TOKEN)
+        .post_init(on_startup) # Avvia il web server all'avvio
         .build()
     )
 
-    # Registra i handler
+    # Handler
     app.add_handler(CommandHandler("start",      cmd_start))
     app.add_handler(CommandHandler("help",       cmd_help))
     app.add_handler(CommandHandler("carburanti", cmd_carburanti))
     app.add_handler(CommandHandler("prezzi",     cmd_prezzi))
-    
-    # Handler SaaS
     app.add_handler(MessageHandler(filters.LOCATION, handle_location))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_menu))
 
-
-    # Scheduler: report mattutino automatico (default 08:00)
+    # Scheduler
     orario = os.environ.get("ORARIO", "08:00")
     try:
         h, m = map(int, orario.split(":"))
@@ -690,7 +728,6 @@ def main() -> None:
         name="report_mattutino",
     )
 
-    log.info("Bot in ascolto — usa /prezzi su Telegram per ottenere i prezzi ora")
     app.run_polling(drop_pending_updates=True)
 
 
