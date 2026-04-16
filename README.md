@@ -30,14 +30,14 @@ WEBAPP_URL=https://tuo-utente.github.io/tuo-repo  # Se usi GitHub Pages
 
 Questa versione supporta il **decoupling**: puoi ospitare la Mini App su GitHub Pages e il bot su un server separato.
 
-1.  **Backend (Bot)**: Ospita `bot_benzina.py` su Render/Railway/VPS. Il server ha il supporto **CORS** attivo per dialogare con GitHub.
-2.  **Frontend (Mini App)**: Carica la cartella `static/` su GitHub Pages. 
-3.  **Configurazione**: Nel file `static/app.js`, imposta la variabile `BACKEND_URL` con l'indirizzo del tuo server.
+1. **Backend (Bot)**: Ospita `bot_benzina.py` su Render/Railway/VPS. Il server ha il supporto **CORS** attivo per dialogare con GitHub.
+2. **Frontend (Mini App)**: Carica `index.html` nella root di GitHub Pages e mantieni `app.js` e `style.css` nella cartella `static/`.
 
 ## 📁 Struttura
 
 - `bot_benzina.py`: Logica bot e API.
-- `static/`: Frontend della Web App (HTML/CSS/JS).
+- `index.html`: Entry point Web App (in root per GitHub Pages).
+- `static/`: Contiene `app.js` e `style.css`.
 
 ---
 

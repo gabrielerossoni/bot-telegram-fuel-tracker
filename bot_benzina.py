@@ -578,8 +578,8 @@ async def web_api_prices(request):
         return web.json_response({"error": str(e)}, status=500)
 
 async def web_index(request):
-    """Serve l'interfaccia della Web App."""
-    return web.FileResponse('static/index.html')
+    """Serve l'interfaccia della Web App (ora in root)."""
+    return web.FileResponse('index.html')
 
 @web.middleware
 async def cors_middleware(request, handler):
@@ -600,7 +600,9 @@ async def start_web_server():
     app = web.Application(middlewares=[cors_middleware])
     app.router.add_get('/', web_index) 
     app.router.add_get('/api/prices', web_api_prices)
-    app.router.add_static('/', path='static', name='static')
+    
+    # Serve i file statici dalla cartella 'static'
+    app.router.add_static('/static', path='static', name='static')
     
     runner = web.AppRunner(app)
     await runner.setup()
