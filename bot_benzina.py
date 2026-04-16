@@ -524,48 +524,51 @@ def verify_telegram_init_data(init_data: str) -> dict:
     """Valida i dati provenienti dalla Web App per sicurezza."""
     if not init_data: return None
     try:
-        from urllib.parse import parse_qs, unquote
-        parsed = {k: v[0] for k, v in parse_qs(init_data).items()}
-        hash_check = parsed.pop('hash', None)
+        from urllib.parse import parse_qsl
+        # parse_qsl restituisce una lista di tuple (chiave, valore) unquoted
+        params = dict(parse_qsl(init_data))
+        hash_check = params.pop('hash', None)
+        if not hash_check: return None
         
-        # Crea stringa di controllo
-        data_check_string = "\n".join([f"{k}={v}" for k, v in sorted(parsed.items())])
+        # Crea stringa di controllo: chiavi ordinate alfabeticamente
+        data_check_string = "\n".join([f"{k}={v}" for k, v in sorted(params.items())])
         
-        # Crea chiave segreta (HMAC-SHA256 del token con "WebAppData")
+        # La chiave segreta è l'HMAC-SHA256 del token con la stringa "WebAppData"
+        # NOTA: Il token deve essere quello del bot
         secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
         calculated_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
         
         if calculated_hash == hash_check:
-            user_data = json.loads(parsed['user'])
-            return user_data
+            return json.loads(params.get('user', '{}'))
+        else:
+            log.warning("Hash mismatch: previsto %s, ricevuto %s", calculated_hash, hash_check)
     except Exception as e:
         log.error("Errore validazione TWA: %s", e)
     return None
 
 async def web_api_prices(request):
     """Endpoint che restituisce i prezzi JSON per la Web App."""
-    init_data = request.query.get('initData')
-    user = verify_telegram_init_data(init_data)
-    
-    if not user:
-        return web.json_response({"error": "Unauthorized"}, status=401)
-    
-    chat_id = user['id']
-    cfg = get_user_cfg(chat_id)
-    
-    if cfg["lat"] == 0:
-        return web.json_response({"error": "Posizione non impostata"}, status=400)
-        
     try:
+        init_data = request.query.get('initData')
+        user = verify_telegram_init_data(init_data)
+        
+        if not user or not user.get('id'):
+            return web.json_response({"error": "Unauthorized (Hash Mismatch)"}, status=401)
+        
+        chat_id = user['id']
+        cfg = get_user_cfg(chat_id)
+        
+        if cfg["lat"] == 0:
+            return web.json_response({"error": "Posizione non impostata"}, status=400)
+            
         anagrafica, prezzi = scarica_dati()
         stazioni = trova_stazioni_vicine(anagrafica, prezzi, cfg)
         
-        # Converti DataFrame in lista di dizionari "puliti"
         stations_list = []
-        for _, row in stazioni.head(15).iterrows():
+        for _, row in stazioni.head(20).iterrows():
             stations_list.append({
-                "nome_impianto": row.get("nome impianto", ""),
-                "bandiera": row.get("bandiera", ""),
+                "nome_impianto": str(row.get("nome impianto", "")),
+                "bandiera": str(row.get("bandiera", "")),
                 "prezzo": float(row["prezzo"]),
                 "distanza_km": float(row["distanza_km"]),
                 "_lat": float(row["_lat"]),
@@ -577,14 +580,20 @@ async def web_api_prices(request):
             "stations": stations_list
         })
     except Exception as e:
+        log.error("Errore API prices: %s", e, exc_info=True)
         return web.json_response({"error": str(e)}, status=500)
+
+async def web_index(request):
+    """Serve l'interfaccia della Web App."""
+    return web.FileResponse('static/index.html')
 
 async def start_web_server():
     """Avvia il server web aiohttp in background."""
     app = web.Application()
+    app.router.add_get('/', web_index) # Route specifica per la home
     app.router.add_get('/api/prices', web_api_prices)
     # Serve i file statici dalla cartella 'static'
-    app.router.add_static('/', path='static', name='static', show_index=True)
+    app.router.add_static('/', path='static', name='static')
     
     runner = web.AppRunner(app)
     await runner.setup()
