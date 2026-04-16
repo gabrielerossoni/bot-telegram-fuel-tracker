@@ -583,17 +583,24 @@ async def web_index(request):
 
 @web.middleware
 async def cors_middleware(request, handler):
-    """Aggiunge header CORS per permettere a GitHub Pages di comunicare con il backend."""
+    """Aggiunge header CORS ultra-permissivi per risolvere il 'Failed to fetch'."""
     if request.method == "OPTIONS":
         return web.Response(status=200, headers={
             "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, ngrok-skip-browser-warning",
+            "Access-Control-Max-Age": "86400",
         })
     
-    response = await handler(request)
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    return response
+    try:
+        response = await handler(request)
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, ngrok-skip-browser-warning"
+        return response
+    except web.HTTPException as ex:
+        # Anche in caso di errore (es. 401), aggiungiamo i CORS altrimenti il browser nasconde l'errore reale
+        ex.headers["Access-Control-Allow-Origin"] = "*"
+        raise ex
 
 async def start_web_server():
     """Avvia il server web aiohttp in background."""

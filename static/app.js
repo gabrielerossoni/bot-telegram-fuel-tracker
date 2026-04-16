@@ -114,9 +114,12 @@ async function fetchData(lat, lon) {
             raggio_km: userSettings.raggio_km
         });
 
+        console.log("Fetching from:", `${BACKEND_URL}/api/prices`);
         const response = await fetch(`${BACKEND_URL}/api/prices?${query}`, {
+            method: 'GET',
             headers: {
-                'ngrok-skip-browser-warning': 'true'
+                'ngrok-skip-browser-warning': 'true',
+                'X-Requested-With': 'XMLHttpRequest'
             }
         });
         const data = await response.json();
