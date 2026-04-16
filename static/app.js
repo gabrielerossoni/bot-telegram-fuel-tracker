@@ -1,91 +1,144 @@
-const tg = window.Telegram.WebApp;
+let tg = window.Telegram.WebApp;
+let map, userMarker;
+let markers = [];
+
+// Carica impostazioni salvate o usa default
+let userSettings = {
+    carburante: localStorage.getItem('fuel') || 'Benzina',
+    self_service: localStorage.getItem('self') || 'true',
+    raggio_km: localStorage.getItem('range') || '10'
+};
+
 tg.expand();
 tg.ready();
 
-let map;
-let markers = [];
+// Inizializza UI
+document.addEventListener('DOMContentLoaded', () => {
+    updateUIDisplay();
+    initSettingsPanel();
+    startApp();
+});
 
-// Apply Telegram Theme colors to body
-document.body.style.backgroundColor = tg.backgroundColor;
-document.body.style.color = tg.textColor;
+function updateUIDisplay() {
+    document.getElementById('fuel-type-display').innerText = `Carburante: ${userSettings.carburante}`;
+    document.getElementById('fuel-select').value = userSettings.carburante;
+    document.getElementById('service-select').value = userSettings.self_service;
+    document.getElementById('range-slider').value = userSettings.raggio_km;
+    document.getElementById('range-val').innerText = `${userSettings.raggio_km}km`;
+}
 
-async function init() {
+function initSettingsPanel() {
+    const panel = document.getElementById('settings-panel');
+    const openBtn = document.getElementById('open-settings');
+    const saveBtn = document.getElementById('save-settings');
+    const slider = document.getElementById('range-slider');
+
+    openBtn.onclick = () => panel.classList.toggle('hidden');
+    slider.oninput = (e) => document.getElementById('range-val').innerText = `${e.target.value}km`;
+
+    saveBtn.onclick = () => {
+        userSettings.carburante = document.getElementById('fuel-select').value;
+        userSettings.self_service = document.getElementById('service-select').value;
+        userSettings.raggio_km = document.getElementById('range-slider').value;
+
+        localStorage.setItem('fuel', userSettings.carburante);
+        localStorage.setItem('self', userSettings.self_service);
+        localStorage.setItem('range', userSettings.raggio_km);
+
+        panel.classList.add('hidden');
+        updateUIDisplay();
+        location.reload(); // Rinfresca tutto con i nuovi dati
+    };
+}
+
+async function startApp() {
+    if (!navigator.geolocation) {
+        showError("Geolocalizzazione non supportata");
+        return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+        (pos) => {
+            const lat = pos.coords.latitude;
+            const lon = pos.coords.longitude;
+            initMap(lat, lon);
+            fetchData(lat, lon);
+        },
+        (err) => {
+            console.error(err);
+            showError("Attiva il GPS per usare la mappa");
+        },
+        { enableHighAccuracy: true }
+    );
+}
+
+function initMap(lat, lon) {
+    if (map) return;
+    map = L.map('map', {
+        zoomControl: false,
+        attributionControl: false
+    }).setView([lat, lon], 13);
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+
+    userMarker = L.circleMarker([lat, lon], {
+        radius: 8,
+        fillColor: "#0088cc",
+        color: "#fff",
+        weight: 2,
+        fillOpacity: 0.8
+    }).addTo(map).bindPopup("Tu sei qui");
+}
+
+async function fetchData(lat, lon) {
+    const loader = document.getElementById('loader');
+    const initData = tg.initData;
+
     try {
-        const initData = tg.initData;
-        const response = await fetch(`/api/prices?initData=${encodeURIComponent(initData)}`);
+        const query = new URLSearchParams({
+            initData: initData,
+            lat: lat,
+            lon: lon,
+            carburante: userSettings.carburante,
+            self_service: userSettings.self_service,
+            raggio_km: userSettings.raggio_km
+        });
+
+        const response = await fetch(`/api/prices?${query}`);
         const data = await response.json();
-        
+
         if (data.error) throw new Error(data.error);
 
-        renderDashboard(data);
+        loader.classList.add('hidden');
+        renderStations(data.stations);
     } catch (err) {
-        console.error("Dashboard error:", err);
-        document.getElementById('loader').innerHTML = `<p style="color:#ff6b6b">Errore carica dati: ${err.message}</p>`;
+        loader.innerHTML = `<p style="color:#ff6b6b">Errore: ${err.message}</p>`;
     }
 }
 
-function renderDashboard(data) {
-    // 1. Loader removal
-    document.body.classList.add('body-loaded');
-    
-    // 2. Info pills
-    document.getElementById('fuel-type').innerText = data.config.carburante;
-    document.getElementById('service-type').innerText = data.config.self_service ? 'Self' : 'Servito';
-    
-    // 3. Map setup
-    const userLat = data.config.lat;
-    const userLon = data.config.lon;
-    
-    if (!map) {
-        map = L.map('map').setView([userLat, userLon], 13);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '&copy; OpenStreetMap'
-        }).addTo(map);
-        
-        // Dark Mode Map adjustment (Optional: uses CSS filter on tiles)
-        const isDark = tg.colorScheme === 'dark';
-        if (isDark) {
-            document.querySelector('.leaflet-tile-pane').style.filter = 'invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%)';
-        }
-    }
+function renderStations(stations) {
+    markers.forEach(m => map.removeLayer(m));
+    markers = [];
 
-    // Add User Marker
-    L.circleMarker([userLat, userLon], { radius: 8, color: '#2481cc', fillOpacity: 0.8 }).addTo(map)
-        .bindPopup("La tua posizione");
-
-    // 4. Stations rendering
-    const container = document.getElementById('stations-container');
-    container.innerHTML = '';
-
-    data.stations.forEach(st => {
-        // Map Marker
-        const marker = L.marker([st._lat, st._lon]).addTo(map)
-            .bindPopup(`<b>${st.bandiera || 'Stazione'}</b><br>${st.prezzo.toFixed(3)}€/L`);
+    stations.forEach((st, index) => {
+        const marker = L.marker([st._lat, st._lon]).addTo(map);
+        marker.bindPopup(`
+            <div class="popup-content">
+                <strong>${st.nome_impianto}</strong><br>
+                <span class="price">${st.prezzo.toFixed(3)} €/L</span><br>
+                <small>${st.bandiera} • ${st.distanza_km.toFixed(1)} km</small><br>
+                <a href="https://www.google.com/maps/search/?api=1&query=${st._lat},${st._lon}" target="_blank" class="nav-link">Naviga</a>
+            </div>
+        `);
         markers.push(marker);
-
-        // List Item
-        const card = document.createElement('div');
-        card.className = 'station-card';
-        card.innerHTML = `
-            <div class="st-info">
-                <span class="st-name">${st.bandiera || 'Stazione'}</span>
-                <span class="st-dist">${st.distanza_km.toFixed(1)} km • ${st.nome_impianto || ''}</span>
-            </div>
-            <div class="st-price-box">
-                <span class="st-price">${st.prezzo.toFixed(3)}</span>
-                <span class="st-unit">€/L</span>
-            </div>
-        `;
-        
-        card.onclick = () => {
-            map.flyTo([st._lat, st._lon], 15);
-            marker.openPopup();
-            // Trigger feedback
-            if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
-        };
-
-        container.appendChild(card);
     });
+
+    if (stations.length > 0) {
+        const group = new L.featureGroup([...markers, userMarker]);
+        map.fitBounds(group.getBounds().pad(0.1));
+    }
 }
 
-init();
+function showError(msg) {
+    document.getElementById('loader').innerHTML = `<p style="color:#ff6b6b">${msg}</p>`;
+}

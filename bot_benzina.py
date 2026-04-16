@@ -95,7 +95,6 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
-from database import db
 
 # ══════════════════════════════════════════════════════════════════
 #  LOGGING & SILENCER
@@ -128,23 +127,23 @@ DEFAULT_CONFIG = {
     "orario_invio": "08:00",
 }
 
-def get_user_cfg(chat_id: int) -> dict:
-    """Recupera la config dal DB o usa i default se è un nuovo utente."""
-    user = db.get_user(chat_id)
-    if not user:
-        return {**DEFAULT_CONFIG, "lat": 0, "lon": 0}
+def get_user_cfg(params: dict = None) -> dict:
+    """Restituisce la configurazione basandosi sugli input (senza DB)."""
+    cfg = DEFAULT_CONFIG.copy()
+    cfg.update({"lat": 0, "lon": 0})
     
-    # Mapping campi DB -> campi attesi dal codice
-    return {
-        "lat": user["lat"],
-        "lon": user["lon"],
-        "raggio_km": user["raggio_km"],
-        "top_n": DEFAULT_CONFIG["top_n"],
-        "carburante": user["carburante"],
-        "self_service": bool(user["self_service"]),
-        "soglia_alert": user["soglia_alert"],
-        "orario_invio": user["orario_invio"],
-    }
+    if params:
+        for k in ["lat", "lon", "raggio_km", "carburante", "soglia_alert"]:
+            if k in params and params[k]:
+                try: 
+                    if k in ["lat", "lon", "soglia_alert"]: cfg[k] = float(params[k])
+                    elif k == "raggio_km": cfg[k] = int(params[k])
+                    else: cfg[k] = params[k]
+                except: pass
+        if "self_service" in params:
+            cfg["self_service"] = str(params["self_service"]).lower() in ["true", "1", "yes"]
+
+    return cfg
 
 # Token necessario per l'avvio (da .env)
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
@@ -448,15 +447,11 @@ MAIN_MENU = ReplyKeyboardMarkup([
 ], resize_keyboard=True)
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/start — messaggio di benvenuto e registrazione."""
-    chat_id = update.effective_chat.id
-    db.create_or_update_user(chat_id)
-    
+    """/start — messaggio di benvenuto."""
     await update.message.reply_text(
-        "🚀 *Benvenuto su Bot Benzina Pro!*\n\n"
+        "🚀 *Benvenuto su Bot Benzina Stateless!*\n\n"
         "Questo bot ti aiuta a trovare i distributori più economici intorno a te.\n\n"
-        "📍 *Per iniziare*: Clicca il tasto qui sotto per inviare la tua posizione attuale.\n"
-        "⏰ *Automatico*: Riceverai un report ogni mattina alle 08:00.",
+        "📍 *Per iniziare*: Invia la tua posizione attuale o apri la Dashboard.",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=MAIN_MENU
     )
@@ -464,22 +459,21 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Gestisce l'invio della posizione GPS da parte dell'utente."""
     loc = update.message.location
-    chat_id = update.effective_chat.id
-    
-    db.create_or_update_user(chat_id, lat=loc.latitude, lon=loc.longitude)
+    cfg = get_user_cfg({"lat": loc.latitude, "lon": loc.longitude})
     
     await update.message.reply_text(
-        f"✅ *Posizione aggiornata!*\n"
-        f"Ora cercherò i prezzi intorno a: `{loc.latitude:.5f}, {loc.longitude:.5f}`.\n\n"
-        "Clicca '⛽ Prezzi Vicini' per vedere i risultati.",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=MAIN_MENU
+        f"✅ *Posizione ricevuta!*\n"
+        f"Cerco i prezzi intorno a: `{loc.latitude:.5f}, {loc.longitude:.5f}`...",
+        parse_mode=ParseMode.MARKDOWN
     )
+    await genera_e_invia_report(context.bot, update.effective_chat.id, cfg)
 
 async def cmd_prezzi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/prezzi [carburante] [self|servito] o pulsante menu."""
     chat_id = update.effective_chat.id
-    cfg = get_user_cfg(chat_id)
+    # Senza DB, i prezzi via testo richiedono l'invio della posizione ogni volta
+    # o l'uso di coordinate manuali.
+    cfg = get_user_cfg() # Prende i default
     
     if cfg["lat"] == 0:
         await update.message.reply_text("📍 Prima devi inviare la tua posizione!")
@@ -547,16 +541,16 @@ def verify_telegram_init_data(init_data: str) -> dict:
     return None
 
 async def web_api_prices(request):
-    """Endpoint che restituisce i prezzi JSON per la Web App."""
+    """Endpoint che restituisce i prezzi JSON per la Web App (Stateless)."""
     try:
         init_data = request.query.get('initData')
         user = verify_telegram_init_data(init_data)
         
         if not user or not user.get('id'):
-            return web.json_response({"error": "Unauthorized (Hash Mismatch)"}, status=401)
+            return web.json_response({"error": "Unauthorized"}, status=401)
         
-        chat_id = user['id']
-        cfg = get_user_cfg(chat_id)
+        # Legge i parametri direttamente dalla query string inviata dal frontend
+        cfg = get_user_cfg(request.query)
         
         if cfg["lat"] == 0:
             return web.json_response({"error": "Posizione non impostata"}, status=400)
@@ -565,7 +559,7 @@ async def web_api_prices(request):
         stazioni = trova_stazioni_vicine(anagrafica, prezzi, cfg)
         
         stations_list = []
-        for _, row in stazioni.head(20).iterrows():
+        for _, row in stazioni.head(30).iterrows():
             stations_list.append({
                 "nome_impianto": str(row.get("nome impianto", "")),
                 "bandiera": str(row.get("bandiera", "")),
@@ -597,9 +591,10 @@ async def start_web_server():
     
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', 8080)
+    port = int(os.environ.get("PORT", "8080"))
+    site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    log.info("🌐 Web App Server attivo su http://localhost:8080")
+    log.info("🌐 Web App Server attivo sulla porta %d", port)
 
 
 
@@ -611,15 +606,14 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if text == "⛽ Prezzi Vicini":
         await cmd_prezzi(update, context)
     elif text == "⚙️ Impostazioni":
-        cfg = get_user_cfg(chat_id)
+        cfg = get_user_cfg()
         modo = "Self" if cfg["self_service"] else "Servito"
         await update.message.reply_text(
-            "⚙️ *Le tue Preferenze*\n\n"
+            "⚙️ *Preferenze Default*\n\n"
             f"⛽ Carburante: `{cfg['carburante']}`\n"
             f"🛠 Modalità: `{modo}`\n"
-            f"📏 Raggio: `{cfg['raggio_km']} km`\n"
-            f"⏰ Report: `{cfg['orario_invio']}`\n\n"
-            "_Per ora usa i comandi per cambiare (es. /prezzi gasolio)_",
+            f"📏 Raggio: `{cfg['raggio_km']} km`\n\n"
+            "_Usa la Dashboard per personalizzare e salvare nel tuo telefono!_",
             parse_mode=ParseMode.MARKDOWN
         )
     elif text == "📖 Aiuto":
@@ -631,52 +625,32 @@ async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             lat_s, lon_s = text.split(",")
             lat, lon = float(lat_s.strip()), float(lon_s.strip())
             if -90 <= lat <= 90 and -180 <= lon <= 180:
-                db.create_or_update_user(chat_id, lat=lat, lon=lon)
-                await update.message.reply_text(f"✅ Posizione impostata manualmente: `{lat}, {lon}`")
+                cfg = get_user_cfg({"lat": lat, "lon": lon})
+                await update.message.reply_text(f"✅ Coordinate impostate: `{lat}, {lon}`")
+                await genera_e_invia_report(context.bot, chat_id, cfg)
             else:
                 raise ValueError()
         except:
             pass # Non è una coordinata, ignora
 
 # ══════════════════════════════════════════════════════════════════
-#  JOB SCHEDULATO — report automatico mattutino
-# ══════════════════════════════════════════════════════════════════
-
-async def job_report_mattutino(context: CallbackContext) -> None:
-    """Invia il report mattutino a TUTTI gli utenti registrati nel DB."""
-    all_users = db.get_all_users()
-    log.info("⏰ Job mattutino: invio a %d utenti", len(all_users))
-    
-    for user_data in all_users:
-        chat_id = user_data["chat_id"]
-        cfg = get_user_cfg(chat_id)
-        if cfg["lat"] == 0: continue # Salta utenti senza posizione
-        
-        try:
-            await genera_e_invia_report(context.bot, chat_id, cfg)
-        except Exception as e:
-            log.error("Errore invio report a %s: %s", chat_id, e)
-
-# ══════════════════════════════════════════════════════════════════
 #  MAIN / CLI MODE
 # ══════════════════════════════════════════════════════════════════
 
 async def run_once():
-    """Modalità singola per GitHub Actions (usa il primo utente o variabile d'ambiente)."""
+    """Modalità singola per GitHub Actions."""
     from telegram import Bot
     token = os.environ.get("BOT_TOKEN", "")
     chat_id = os.environ.get("CHAT_ID", "")
     
-    if not token or not chat_id:
-        log.error("BOT_TOKEN e CHAT_ID necessari per run_once")
-        return
+    if not token or not chat_id: return
 
     bot = Bot(token=token)
-    cfg = get_user_cfg(int(chat_id))
-    # Se il DB è vuoto per questo chat_id, usa i default di env
-    if cfg["lat"] == 0:
-        cfg["lat"] = float(os.environ.get("LAT", 0))
-        cfg["lon"] = float(os.environ.get("LON", 0))
+    cfg = get_user_cfg({
+        "lat": float(os.environ.get("LAT", 0)),
+        "lon": float(os.environ.get("LON", 0)),
+        "carburante": os.environ.get("CARBURANTE", "Benzina")
+    })
 
     async with bot:
         await genera_e_invia_report(bot, int(chat_id), cfg)
@@ -735,19 +709,6 @@ def main() -> None:
     app.add_handler(CommandHandler("prezzi",     cmd_prezzi))
     app.add_handler(MessageHandler(filters.LOCATION, handle_location))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_menu))
-
-    # Scheduler
-    orario = os.environ.get("ORARIO", "08:00")
-    try:
-        h, m = map(int, orario.split(":"))
-    except ValueError:
-        h, m = 8, 0
-
-    app.job_queue.run_daily(
-        job_report_mattutino,
-        time=dtime(hour=h, minute=m, second=0, tzinfo=TZ_ROMA),
-        name="report_mattutino",
-    )
 
     app.run_polling(drop_pending_updates=True)
 

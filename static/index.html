@@ -15,11 +15,41 @@
     <div id="loader" class="loader-container">
         <div class="spinner"></div>
         <p>Caricamento prezzi...</p>
-    </div>
+        <!-- Dashboard Header -->
+        <header class="glass-card header">
+            <div class="header-content">
+                <h1>⛽ Prezzi Vicini</h1>
+                <p id="fuel-type-display">Carburante: Benzina</p>
+            </div>
+            <button class="settings-btn" id="open-settings">⚙️</button>
+        </header>
 
-    <header class="glass-header">
-        <div class="header-content">
-            <h1 id="user-title">Benzina Pro</h1>
+        <!-- Settings Panel (Hidden by default) -->
+        <div id="settings-panel" class="glass-card settings-panel hidden">
+            <h3>⚙️ Impostazioni</h3>
+            <div class="setting-item">
+                <label>Carburante</label>
+                <select id="fuel-select">
+                    <option value="Benzina">Benzina</option>
+                    <option value="Gasolio">Gasolio</option>
+                    <option value="GPL">GPL</option>
+                    <option value="Metano">Metano</option>
+                </select>
+            </div>
+            <div class="setting-item">
+                <label>Modalità</label>
+                <select id="service-select">
+                    <option value="true">Self Service</option>
+                    <option value="false">Servito</option>
+                </select>
+            </div>
+            <div class="setting-item">
+                <label>Raggio (km)</label>
+                <input type="range" id="range-slider" min="5" max="50" step="5" value="10">
+                <span id="range-val">10km</span>
+            </div>
+            <button id="save-settings" class="btn-primary">Salva e Aggiorna</button>
+        </div>
             <span id="update-badge" class="badge">Live</span>
         </div>
     </header>
