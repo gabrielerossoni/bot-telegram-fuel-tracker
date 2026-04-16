@@ -528,6 +528,28 @@ async def cmd_prezzi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     await genera_e_invia_report(context.bot, chat_id, cfg)
 
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/help — guida comandi."""
+    await update.message.reply_text(
+        "⛽ *Bot Benzina Pro — Guida*\n\n"
+        "•usa i tasti in basso per le funzioni principali\n"
+        "•`/prezzi gasolio` — cerca carburante specifico\n"
+        "•`/prezzi benzina servito` — forza servito\n"
+        "•`/carburanti` — lista tipi disponibili\n"
+        "•`/start` — resetta o inizia da capo\n\n"
+        "_I prezzi sono aggiornati ogni mattina dal MASE._",
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+async def cmd_carburanti(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/carburanti — elenca i tipi supportati."""
+    elenco = "\n".join(f"• `{c}`" for c in CARBURANTI_VALIDI)
+    await update.message.reply_text(
+        f"⛽ *Tipi disponibili:*\n\n{elenco}",
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
 async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Gestisce i click sui pulsanti del menu testuale."""
     text = update.message.text
@@ -616,7 +638,7 @@ def main() -> None:
     # Costruisce l'applicazione con job_queue abilitata
     app = (
         Application.builder()
-        .token(token)
+        .token(BOT_TOKEN)
         .build()
     )
 
@@ -631,12 +653,11 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_menu))
 
 
-    # Scheduler: report mattutino automatico
-    orario = CONFIG["orario_invio"]
+    # Scheduler: report mattutino automatico (default 08:00)
+    orario = os.environ.get("ORARIO", "08:00")
     try:
         h, m = map(int, orario.split(":"))
     except ValueError:
-        print(f"⚠️  Formato orario_invio non valido: '{orario}'. Usa HH:MM (es. '08:00').")
         h, m = 8, 0
 
     app.job_queue.run_daily(
