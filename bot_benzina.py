@@ -63,6 +63,7 @@ for _pkg, _mod in _DEPS:
     except ImportError:
         print(f"[install] {_pkg}...")
         _install(_pkg)
+        importlib.invalidate_caches()
 
 # Carica variabili da .env (se presente) — non fa nulla se il file manca
 from dotenv import load_dotenv
@@ -80,7 +81,7 @@ from datetime import datetime, time as dtime
 import pandas as pd
 import pytz
 import requests
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -139,14 +140,21 @@ CONFIG = {
 }
 
 # URL dati ufficiali MASE aggiornati ogni mattina
-# I file usano | come separatore (pipe), non ;
 URL_ANAGRAFICA = "https://www.mise.gov.it/images/exportCSV/anagrafica_impianti_attivi.csv"
 URL_PREZZI     = "https://www.mise.gov.it/images/exportCSV/prezzo_alle_8.csv"
 
-# Cache locale (usata se il download fallisce)
-_SCRIPT_DIR    = os.path.dirname(os.path.abspath(__file__))
-CACHE_ANA      = os.path.join(_SCRIPT_DIR, "anagrafica_cache.csv")
-CACHE_PRE      = os.path.join(_SCRIPT_DIR, "prezzi_cache.csv")
+# Brand mapping per icone premium
+BRAND_MAP = {
+    "eni": "🐕", "agip": "🐕", "q8": "⛵", "ip": "🟦", "tamoil": "🔴",
+    "esso": "🐅", "shell": "🐚", "repsol": "🟠", "costo": "⚪", "conad": "🛒",
+    "auchan": "🛒", "carrefour": "🛒", "coop": "🛒", "eg": "🟦", "api": "🟦",
+}
+
+def get_brand_emoji(brand: str) -> str:
+    brand = str(brand).lower()
+    for k, v in BRAND_MAP.items():
+        if k in brand: return v
+    return "⛽"
 
 # Tipi di carburante riconosciuti dal dataset MASE
 CARBURANTI_VALIDI = [
@@ -171,41 +179,20 @@ def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
-def _fetch_csv(url: str, cache_file: str) -> bytes:
-    """
-    Scarica il CSV dall'URL.
-    Se il download fallisce (rete, risposta HTML, file troppo piccolo),
-    usa la cache locale. Raise RuntimeError se neanche la cache esiste.
-    """
+def _fetch_csv(url: str) -> bytes:
+    """Scarica il CSV in memoria senza salvare su disco."""
     headers = {"User-Agent": "Mozilla/5.0 (BotBenzina/2.0; +github.com/bot-benzina)"}
     try:
         r = requests.get(url, headers=headers, timeout=30)
         r.raise_for_status()
-
-        ct = r.headers.get("Content-Type", "").lower()
-        if "text/html" in ct:
-            raise ValueError(f"Risposta HTML invece di CSV (Content-Type: {ct})")
-
+        if "text/html" in r.headers.get("Content-Type", "").lower():
+            raise ValueError("Risposta HTML invece di CSV")
         if len(r.content) < 5_000:
-            raise ValueError(f"File troppo piccolo ({len(r.content)} bytes) — forse sito offline")
-
-        with open(cache_file, "wb") as f:
-            f.write(r.content)
-
-        log.info("CSV scaricato: %s (%d KB)", os.path.basename(cache_file), len(r.content) // 1024)
+            raise ValueError("File troppo piccolo — sito MASE probabilmente offline")
         return r.content
-
     except Exception as e:
-        log.warning("Download fallito da %s: %s", url, e)
-        if os.path.exists(cache_file):
-            mtime = datetime.fromtimestamp(os.path.getmtime(cache_file)).strftime("%d/%m %H:%M")
-            log.info("Uso cache locale %s (salvata il %s)", os.path.basename(cache_file), mtime)
-            with open(cache_file, "rb") as f:
-                return f.read()
-        raise RuntimeError(
-            f"Download fallito e nessuna cache disponibile.\n"
-            f"URL: {url}\nErrore: {e}"
-        ) from e
+        log.error("Download fallito da %s: %s", url, e)
+        raise RuntimeError(f"Impossibile scaricare dati MASE: {e}") from e
 
 
 def _parse_csv(raw: bytes) -> pd.DataFrame:
@@ -230,12 +217,12 @@ def _parse_csv(raw: bytes) -> pd.DataFrame:
 
 
 def scarica_dati() -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Scarica e parsa anagrafica e prezzi dal MASE. Usa cache se offline."""
-    raw_ana = _fetch_csv(URL_ANAGRAFICA, CACHE_ANA)
-    raw_pre = _fetch_csv(URL_PREZZI, CACHE_PRE)
+    """Scarica e parsa anagrafica e prezzi dal MASE direttamente in memoria."""
+    raw_ana = _fetch_csv(URL_ANAGRAFICA)
+    raw_pre = _fetch_csv(URL_PREZZI)
     ana = _parse_csv(raw_ana)
     pre = _parse_csv(raw_pre)
-    log.info("Anagrafica: %d impianti | Prezzi: %d rilevazioni", len(ana), len(pre))
+    log.info("Dati caricati in memoria: %d impianti, %d prezzi", len(ana), len(pre))
     return ana, pre
 
 
@@ -428,15 +415,74 @@ def formatta_messaggio(stazioni: pd.DataFrame, cfg: dict) -> str:
 #  PIPELINE PRINCIPALE
 # ══════════════════════════════════════════════════════════════════
 
+async def genera_e_invia_report(bot, chat_id, cfg):
+    """Pipeline completa: scarica, elabora e invia il report con pulsanti."""
+    try:
+        anagrafica, prezzi = scarica_dati()
+        stazioni = trova_stazioni_vicine(anagrafica, prezzi, cfg)
+        
+        ora = datetime.now(TZ_ROMA).strftime("%H:%M")
+        data = datetime.now(TZ_ROMA).strftime("%d/%m")
+        modo = "Self" if cfg["self_service"] else "Servito"
+        
+        header = (
+            f"⛽ *REPORT PREZZI* • {data} {ora}\n"
+            f"🏷 `{cfg['carburante'].upper()}` • {modo}\n"
+            f"📍 Raggio: {cfg['raggio_km']}km\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+        )
+
+        if stazioni.empty:
+            await bot.send_message(chat_id=chat_id, text=header + "❌ Nessuna stazione trovata.", parse_mode=ParseMode.MARKDOWN)
+            return
+
+        top = stazioni.head(cfg["top_n"])
+        media = stazioni["prezzo"].mean()
+        minimo = stazioni["prezzo"].min()
+
+        testo = header
+        for i, (_, row) in enumerate(top.iterrows()):
+            nome = str(row.get("nome impianto") or row.get("gestore") or "N/D").strip()[:25]
+            prezzo = float(row["prezzo"])
+            dist = float(row["distanza_km"])
+            brand = str(row.get("bandiera") or "").strip()
+            
+            emoji = get_brand_emoji(brand)
+            medal = _MEDAGLIE[i] if i < len(_MEDAGLIE) else "🔹"
+            status = "🔥" if prezzo < cfg["soglia_alert"] else "✅" if prezzo <= media else "⚖️"
+
+            testo += f"{medal} *{prezzo:.3f} €/L* {status}\n   {emoji} {nome} ({dist:.1f} km)\n\n"
+
+        testo += (
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 Media: `{media:.3f}` • Min: `{minimo:.3f}`"
+        )
+        
+        # Pulsanti Maps (solo per la più economica per non intasare, o i primi 3)
+        buttons = []
+        for i, (_, row) in enumerate(top.head(3).iterrows()):
+            lat, lon = row["_lat"], row["_lon"]
+            brand = str(row.get("bandiera") or "stazione")
+            url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+            buttons.append([InlineKeyboardButton(f"🗺️ {i+1}. Vai da {brand}", url=url)])
+        
+        await bot.send_message(
+            chat_id=chat_id, 
+            text=testo, 
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+        
+    except Exception as e:
+        log.error("Errore report: %s", e, exc_info=True)
+        await bot.send_message(chat_id=chat_id, text=f"⚠️ Errore: `{e}`")
+
 async def genera_report(cfg: dict) -> str:
-    """
-    Scarica → elabora → formatta il messaggio.
-    È async per compatibilità con i handler Telegram,
-    ma la parte CPU-bound (pandas) è sincrona (dataset piccolo, <50 ms).
-    """
+    # Mantenuto per retrocompatibilità o debug se necessario
     anagrafica, prezzi = scarica_dati()
     stazioni = trova_stazioni_vicine(anagrafica, prezzi, cfg)
     return formatta_messaggio(stazioni, cfg)
+
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -556,29 +602,27 @@ async def cmd_prezzi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 # ══════════════════════════════════════════════════════════════════
 
 async def job_report_mattutino(context: CallbackContext) -> None:
-    """
-    Invia il report mattutino automaticamente all'orario configurato.
-    Schedulato dalla job_queue di python-telegram-bot (APScheduler).
-    """
     log.info("⏰ Job mattutino avviato")
-    cfg = dict(CONFIG)
-    try:
-        testo = await genera_report(cfg)
-        await context.bot.send_message(
-            chat_id=cfg["chat_id"],
-            text=testo,
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        log.info("✅ Report mattutino inviato a chat_id=%s", cfg["chat_id"])
-    except Exception as e:
-        log.error("❌ Errore job mattutino: %s", e, exc_info=True)
-
+    await genera_e_invia_report(context.bot, CONFIG["chat_id"], CONFIG)
 
 # ══════════════════════════════════════════════════════════════════
-#  MAIN
+#  MAIN / CLI MODE
 # ══════════════════════════════════════════════════════════════════
+
+async def run_once():
+    """Modalità singola per GitHub Actions."""
+    from telegram import Bot
+    bot = Bot(token=CONFIG["bot_token"])
+    async with bot:
+        await genera_e_invia_report(bot, CONFIG["chat_id"], CONFIG)
 
 def main() -> None:
+    # Gestione modalità CLI
+    if "--report" in sys.argv:
+        import asyncio
+        asyncio.run(run_once())
+        return
+
     token = CONFIG["bot_token"]
 
     # Validazione token

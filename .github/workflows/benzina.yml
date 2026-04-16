@@ -1,0 +1,36 @@
+name: Report Benzina Mattutino
+
+on:
+  schedule:
+    # 06:00 UTC = 08:00 ora italiana (CET)
+    # GitHub Actions usa UTC.
+    - cron: '0 6 * * *'
+  workflow_dispatch: # Permette di avviarlo manualmente per test
+
+jobs:
+  send_report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install "python-telegram-bot[job-queue]==20.7" requests pandas pytz python-dotenv -q
+
+      - name: Run Report
+        run: python bot_benzina.py --report
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          LAT: ${{ secrets.LAT }}
+          LON: ${{ secrets.LON }}
+          RAGGIO: ${{ secrets.RAGGIO }}
+          CARBURANTE: ${{ secrets.CARBURANTE }}
+          SELF_SERVICE: ${{ secrets.SELF_SERVICE }}
+          SOGLIA: ${{ secrets.SOGLIA }}
