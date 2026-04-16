@@ -81,24 +81,34 @@ from datetime import datetime, time as dtime
 import pandas as pd
 import pytz
 import requests
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
     CallbackContext,
     CommandHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
+from database import db
 
 # ══════════════════════════════════════════════════════════════════
-#  LOGGING
+#  LOGGING & SILENCER
 # ══════════════════════════════════════════════════════════════════
 logging.basicConfig(
-    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
-    datefmt="%H:%M:%S",
+    format="%(asctime)s | %(message)s",
+    datefmt="%H:%M",
     level=logging.INFO,
 )
-log = logging.getLogger("bot_benzina")
+# Silenzia log di sistema troppo rumorosi
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("apscheduler").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.ERROR)
+
+log = logging.getLogger("bot")
 
 # ══════════════════════════════════════════════════════════════════
 #  CONFIGURAZIONE
@@ -106,38 +116,36 @@ log = logging.getLogger("bot_benzina")
 # ⚙️  Modifica i valori qui sotto, oppure usa variabili d'ambiente
 # per l'uso su GitHub Actions / server remoto (più sicuro per i token).
 # ─────────────────────────────────────────────────────────────────
-CONFIG = {
-    # ── Telegram ──────────────────────────────────────────────────
-    # Ottienilo da @BotFather (es. "7123456789:AAFxyz...")
-    # Imposta BOT_TOKEN nel file .env oppure come variabile d'ambiente
-    "bot_token": os.environ.get("BOT_TOKEN", ""),
-
-    # Ottienilo da @userinfobot (solo il numero, es. "123456789")
-    # Usato per il report mattutino automatico
-    "chat_id": os.environ.get("CHAT_ID", ""),
-
-    # ── La tua posizione ──────────────────────────────────────────
-    # maps.google.com → tasto destro su casa tua → clicca le coordinate
-    # Imposta LAT e LON nel file .env
-    "lat": float(os.environ.get("LAT",  "0")),
-    "lon": float(os.environ.get("LON",  "0")),
-
-    # ── Parametri di ricerca ──────────────────────────────────────
-    "raggio_km":    int(os.environ.get("RAGGIO",   "10")),   # km
-    "top_n":        int(os.environ.get("TOP_N",      "5")),   # stazioni da mostrare
-
-    # "Benzina" | "Gasolio" | "GPL" | "Metano" | "Benzina Special" | "Gasolio Special"
-    "carburante":  os.environ.get("CARBURANTE", "Benzina"),
-
-    # True = self-service · False = servito
-    "self_service": os.environ.get("SELF_SERVICE", "true").lower() == "true",
-
-    # ── Alert prezzo basso ────────────────────────────────────────
-    "soglia_alert": float(os.environ.get("SOGLIA", "1.5")),
-
-    # ── Orario invio automatico (HH:MM, ora italiana) ─────────────
-    "orario_invio": os.environ.get("ORARIO", "08:00"),
+# ⚙️ Valori predefiniti per i nuovi utenti
+DEFAULT_CONFIG = {
+    "raggio_km":    10,
+    "top_n":        5,
+    "carburante":   "Benzina",
+    "self_service": True,
+    "soglia_alert": 1.55,
+    "orario_invio": "08:00",
 }
+
+def get_user_cfg(chat_id: int) -> dict:
+    """Recupera la config dal DB o usa i default se è un nuovo utente."""
+    user = db.get_user(chat_id)
+    if not user:
+        return {**DEFAULT_CONFIG, "lat": 0, "lon": 0}
+    
+    # Mapping campi DB -> campi attesi dal codice
+    return {
+        "lat": user["lat"],
+        "lon": user["lon"],
+        "raggio_km": user["raggio_km"],
+        "top_n": DEFAULT_CONFIG["top_n"],
+        "carburante": user["carburante"],
+        "self_service": bool(user["self_service"]),
+        "soglia_alert": user["soglia_alert"],
+        "orario_invio": user["orario_invio"],
+    }
+
+# Token necessario per l'avvio (da .env)
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 
 # URL dati ufficiali MASE aggiornati ogni mattina
 URL_ANAGRAFICA = "https://www.mise.gov.it/images/exportCSV/anagrafica_impianti_attivi.csv"
@@ -343,72 +351,50 @@ def trova_stazioni_vicine(
 # Medaglie/numeri fino a 10 stazioni (espandibile)
 _MEDAGLIE = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
 
+def genera_infografica(top_stazioni: pd.DataFrame, carburante: str, chat_id: int):
+    """Genera una card grafica riassuntiva dei prezzi migliori."""
+    if top_stazioni.empty: return None
+    
+    file_path = f"report_{chat_id}.png"
+    plt.figure(figsize=(8, 5))
+    plt.axis('off')
+    
+    # Background color e stile
+    plt.gcf().set_facecolor('#1e1e1e')
+    
+    y_pos = 0.85
+    plt.text(0.5, 0.95, f"REPORT {carburante.upper()}", color='white', 
+             fontsize=22, weight='bold', ha='center', va='center')
+    plt.text(0.5, 0.88, "Top 3 Distributori più economici", color='#aaaaaa', 
+             fontsize=12, ha='center', va='center')
+    
+    colors = ['#FFD700', '#C0C0C0', '#CD7F32'] # Oro, Argento, Bronzo
+    
+    for i, (_, row) in enumerate(top_stazioni.head(3).iterrows()):
+        nome = str(row.get("nome impianto") or row.get("gestore") or "N/D").strip()[:30]
+        prezzo = float(row["prezzo"])
+        brand = str(row.get("bandiera") or "stazione").strip()
+        
+        # Disegna Box
+        rect = plt.Rectangle((0.1, y_pos - 0.2), 0.8, 0.18, color='#2d2d2d', 
+                             ec=colors[i], lw=2, transform=plt.gca().transAxes)
+        plt.gca().add_patch(rect)
+        
+        # Testo
+        plt.text(0.15, y_pos - 0.08, f"{i+1}. {brand.upper()}", color='white', 
+                 fontsize=14, weight='bold', transform=plt.gca().transAxes)
+        plt.text(0.15, y_pos - 0.14, nome, color='#aaaaaa', 
+                 fontsize=10, transform=plt.gca().transAxes)
+        plt.text(0.85, y_pos - 0.12, f"{prezzo:.3f}€/L", color=colors[i], 
+                 fontsize=18, weight='bold', ha='right', transform=plt.gca().transAxes)
+        
+        y_pos -= 0.22
 
-def formatta_messaggio(stazioni: pd.DataFrame, cfg: dict) -> str:
-    """
-    Costruisce il testo Markdown del messaggio Telegram.
-    Funziona correttamente con le colonne lowercase del DataFrame.
-    """
-    ora    = datetime.now(TZ_ROMA).strftime("%d/%m/%Y %H:%M")
-    modo   = "Self-service" if cfg["self_service"] else "Servito"
-    carb   = cfg["carburante"]
-    soglia = cfg["soglia_alert"]
+    # Salva
+    plt.savefig(file_path, bbox_inches='tight', dpi=100, facecolor='#1e1e1e')
+    plt.close()
+    return file_path
 
-    righe = [
-        f"⛽ *Prezzi {carb} · {modo}*",
-        f"📍 Entro {cfg['raggio_km']} km · {ora}",
-        "━" * 28,
-    ]
-
-    if stazioni.empty:
-        righe.append(
-            "❌ Nessuna stazione trovata nel raggio specificato.\n"
-            f"Prova ad aumentare `raggio_km` (attuale: {cfg['raggio_km']} km) "
-            "oppure cambia tipo di carburante con `/prezzi gasolio`."
-        )
-        return "\n".join(righe)
-
-    top    = stazioni.head(cfg["top_n"])
-    media  = stazioni["prezzo"].mean()
-    minimo = stazioni["prezzo"].min()
-
-    for i, (_, row) in enumerate(top.iterrows()):
-        # Le colonne sono in lowercase dopo il parsing
-        nome    = str(row.get("nome impianto") or row.get("gestore") or "N/D").strip()[:32]
-        via     = str(row.get("indirizzo") or "").strip()
-        comune  = str(row.get("comune")    or "").strip()
-        prezzo  = float(row["prezzo"])
-        dist_km = float(row["distanza_km"])
-        bandiera = str(row.get("bandiera") or "").strip()
-
-        alert_tag = " 🔔" if prezzo < soglia else ""
-        brand_tag = f" `{bandiera}`" if bandiera and bandiera.lower() not in ("nan", "") else ""
-        medal     = _MEDAGLIE[i] if i < len(_MEDAGLIE) else f"*{i + 1}.*"
-
-        righe.append(
-            f"{medal} *{prezzo:.3f} €/L*{alert_tag}{brand_tag}\n"
-            f"   📌 {nome}\n"
-            f"   🗺 {via}, {comune} ({dist_km:.1f} km)"
-        )
-        righe.append("")
-
-    righe.append("━" * 28)
-    righe.append(f"📊 Media zona: *{media:.3f} €/L*   Min: *{minimo:.3f} €/L*")
-    righe.append(f"🔎 Stazioni analizzate: {len(stazioni)}")
-
-    if minimo < soglia:
-        righe.extend([
-            "",
-            f"🔔 *ALERT PREZZO BASSO!*\n"
-            f"   Il minimo ({minimo:.3f} €/L) è sotto soglia ({soglia:.2f} €/L)!",
-        ])
-
-    righe.extend([
-        "",
-        "_Dati ufficiali MASE · aggiornati ogni mattina_",
-    ])
-
-    return "\n".join(righe)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -416,7 +402,7 @@ def formatta_messaggio(stazioni: pd.DataFrame, cfg: dict) -> str:
 # ══════════════════════════════════════════════════════════════════
 
 async def genera_e_invia_report(bot, chat_id, cfg):
-    """Pipeline completa: scarica, elabora e invia il report con pulsanti."""
+    """Pipeline completa: scarica, elabora e invia il report con infografica."""
     try:
         anagrafica, prezzi = scarica_dati()
         stazioni = trova_stazioni_vicine(anagrafica, prezzi, cfg)
@@ -425,63 +411,63 @@ async def genera_e_invia_report(bot, chat_id, cfg):
         data = datetime.now(TZ_ROMA).strftime("%d/%m")
         modo = "Self" if cfg["self_service"] else "Servito"
         
-        header = (
-            f"⛽ *REPORT PREZZI* • {data} {ora}\n"
-            f"🏷 `{cfg['carburante'].upper()}` • {modo}\n"
-            f"📍 Raggio: {cfg['raggio_km']}km\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-        )
-
         if stazioni.empty:
-            await bot.send_message(chat_id=chat_id, text=header + "❌ Nessuna stazione trovata.", parse_mode=ParseMode.MARKDOWN)
+            await bot.send_message(chat_id=chat_id, text="❌ Nessun prezzo trovato in zona.")
             return
 
         top = stazioni.head(cfg["top_n"])
         media = stazioni["prezzo"].mean()
         minimo = stazioni["prezzo"].min()
 
-        testo = header
+        # Genera Infografica (solo se ci sono dati)
+        img_path = genera_infografica(top, cfg["carburante"], chat_id)
+        
+        # Testo report
+        testo = (
+            f"⛽ *SaaS DASHBOARD* • {data}\n"
+            f"🏷 `{cfg['carburante'].upper()}` • {modo}\n\n"
+        )
+
+        buttons = []
         for i, (_, row) in enumerate(top.iterrows()):
-            nome = str(row.get("nome impianto") or row.get("gestore") or "N/D").strip()[:25]
+            brand = str(row.get("bandiera") or "").strip()
             prezzo = float(row["prezzo"])
             dist = float(row["distanza_km"])
-            brand = str(row.get("bandiera") or "").strip()
+            lat, lon = row["_lat"], row["_lon"]
             
             emoji = get_brand_emoji(brand)
-            medal = _MEDAGLIE[i] if i < len(_MEDAGLIE) else "🔹"
             status = "🔥" if prezzo < cfg["soglia_alert"] else "✅" if prezzo <= media else "⚖️"
+            testo += f"{_MEDAGLIE[i] if i < 10 else '•'} *{prezzo:.3f} €/L* {status}\n   {emoji} ({dist:.1f} km)\n"
+            
+            if i < 3:
+                maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+                buttons.append([InlineKeyboardButton(f"📍 {i+1}. Vai da {brand if brand else 'lui'}", url=maps_url)])
 
-            testo += f"{medal} *{prezzo:.3f} €/L* {status}\n   {emoji} {nome} ({dist:.1f} km)\n\n"
+        # Invio Foto + Testo
+        if img_path and os.path.exists(img_path):
+            with open(img_path, "rb") as photo:
+                await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=photo,
+                    caption=testo,
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=InlineKeyboardMarkup(buttons) if buttons else None
+                )
+            os.remove(img_path)
+        else:
+            await bot.send_message(chat_id=chat_id, text=testo, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(buttons))
 
-        testo += (
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            f"📊 Media: `{media:.3f}` • Min: `{minimo:.3f}`"
-        )
-        
-        # Pulsanti Maps (solo per la più economica per non intasare, o i primi 3)
-        buttons = []
-        for i, (_, row) in enumerate(top.head(3).iterrows()):
-            lat, lon = row["_lat"], row["_lon"]
-            brand = str(row.get("bandiera") or "stazione")
-            url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-            buttons.append([InlineKeyboardButton(f"🗺️ {i+1}. Vai da {brand}", url=url)])
-        
-        await bot.send_message(
-            chat_id=chat_id, 
-            text=testo, 
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=InlineKeyboardMarkup(buttons)
-        )
-        
+        # Alert Prezzo Bersaglio
+        if minimo <= cfg["soglia_alert"]:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=f"🔔 *ALERT PREZZO BERSAGLIO!*\nAbbiamo trovato {cfg['carburante']} a *{minimo:.3f} €/L*, che è pari o sotto la tua soglia di {cfg['soglia_alert']:.2f}€!",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            
     except Exception as e:
         log.error("Errore report: %s", e, exc_info=True)
-        await bot.send_message(chat_id=chat_id, text=f"⚠️ Errore: `{e}`")
-
-async def genera_report(cfg: dict) -> str:
-    # Mantenuto per retrocompatibilità o debug se necessario
-    anagrafica, prezzi = scarica_dati()
-    stazioni = trova_stazioni_vicine(anagrafica, prezzi, cfg)
-    return formatta_messaggio(stazioni, cfg)
+        await bot.send_message(chat_id=chat_id, text=f"⚠️ Errore recupero dati: `{e}`")
 
 
 
@@ -489,112 +475,79 @@ async def genera_report(cfg: dict) -> str:
 #  HANDLER TELEGRAM — rispondono ai comandi dell'utente
 # ══════════════════════════════════════════════════════════════════
 
+MAIN_MENU = ReplyKeyboardMarkup([
+    [KeyboardButton("⛽ Prezzi Vicini", request_location=False)],
+    [KeyboardButton("📍 Invia Posizione attuale", request_location=True)],
+    [KeyboardButton("⚙️ Impostazioni"), KeyboardButton("📖 Aiuto")]
+], resize_keyboard=True)
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/start — messaggio di benvenuto."""
+    """/start — messaggio di benvenuto e registrazione."""
+    chat_id = update.effective_chat.id
+    db.create_or_update_user(chat_id)
+    
     await update.message.reply_text(
-        "👋 *Benvenuto su Bot Benzina!*\n\n"
-        "Ottengo i prezzi dai dati ufficiali MASE in tempo reale.\n\n"
-        "*Comandi disponibili:*\n"
-        "• /prezzi — prezzi nella tua zona adesso\n"
-        "• /prezzi gasolio — prezzi gasolio\n"
-        "• /prezzi benzina servito — benzina servito\n"
-        "• /carburanti — lista tipi disponibili\n"
-        "• /info — configurazione attuale\n"
-        "• /help — questa guida\n\n"
-        "_Il bot ti invia automaticamente i prezzi ogni mattina_ ⏰",
+        "🚀 *Benvenuto su Bot Benzina Pro!*\n\n"
+        "Questo bot ti aiuta a trovare i distributori più economici intorno a te.\n\n"
+        "📍 *Per iniziare*: Clicca il tasto qui sotto per inviare la tua posizione attuale.\n"
+        "⏰ *Automatico*: Riceverai un report ogni mattina alle 08:00.",
         parse_mode=ParseMode.MARKDOWN,
+        reply_markup=MAIN_MENU
     )
 
-
-async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/help — guida comandi."""
+async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Gestisce l'invio della posizione GPS da parte dell'utente."""
+    loc = update.message.location
+    chat_id = update.effective_chat.id
+    
+    db.create_or_update_user(chat_id, lat=loc.latitude, lon=loc.longitude)
+    
     await update.message.reply_text(
-        "⛽ *Bot Benzina — Guida comandi*\n\n"
-        "`/prezzi` — prezzi adesso (tipo configurato)\n"
-        "`/prezzi gasolio` — prepend il tipo\n"
-        "`/prezzi benzina self` — forza self-service\n"
-        "`/prezzi gasolio servito` — forza servito\n"
-        "`/carburanti` — tipi disponibili\n"
-        "`/info` — configurazione corrente\n"
-        "`/start` — benvenuto\n\n"
-        "_Dati MASE aggiornati ogni mattina alle 8:00_",
+        f"✅ *Posizione aggiornata!*\n"
+        f"Ora cercherò i prezzi intorno a: `{loc.latitude:.5f}, {loc.longitude:.5f}`.\n\n"
+        "Clicca '⛽ Prezzi Vicini' per vedere i risultati.",
         parse_mode=ParseMode.MARKDOWN,
+        reply_markup=MAIN_MENU
     )
-
-
-async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/info — mostra configurazione attuale."""
-    cfg  = CONFIG
-    modo = "Self-service" if cfg["self_service"] else "Servito"
-    await update.message.reply_text(
-        "⚙️ *Configurazione attuale*\n\n"
-        f"📍 Posizione: `{cfg['lat']:.5f}, {cfg['lon']:.5f}`\n"
-        f"📏 Raggio: `{cfg['raggio_km']} km`\n"
-        f"⛽ Carburante: `{cfg['carburante']}`\n"
-        f"🛠 Modalità: `{modo}`\n"
-        f"🔔 Soglia alert: `{cfg['soglia_alert']:.2f} €/L`\n"
-        f"📊 Stazioni mostrate: `{cfg['top_n']}`\n"
-        f"⏰ Report automatico: `{cfg['orario_invio']}` (ora italiana)\n",
-        parse_mode=ParseMode.MARKDOWN,
-    )
-
-
-async def cmd_carburanti(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/carburanti — elenca i tipi supportati."""
-    elenco = "\n".join(f"• `{c}`" for c in CARBURANTI_VALIDI)
-    await update.message.reply_text(
-        f"⛽ *Tipi di carburante disponibili:*\n\n{elenco}\n\n"
-        "Esempi:\n"
-        "`/prezzi gasolio`\n"
-        "`/prezzi GPL`\n"
-        "`/prezzi Metano`",
-        parse_mode=ParseMode.MARKDOWN,
-    )
-
 
 async def cmd_prezzi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    /prezzi [carburante] [self|servito]
-    Mostra i prezzi adesso. Argomenti opzionali sovrascrivono il CONFIG
-    solo per questa richiesta (senza modificare la configurazione globale).
-    """
-    cfg  = dict(CONFIG)   # copia locale — non modifica il global CONFIG
+    """/prezzi [carburante] [self|servito] o pulsante menu."""
+    chat_id = update.effective_chat.id
+    cfg = get_user_cfg(chat_id)
+    
+    if cfg["lat"] == 0:
+        await update.message.reply_text("📍 Prima devi inviare la tua posizione!")
+        return
+
+    # Se invocato via comando con argomenti
     args = [a.lower() for a in (context.args or [])]
-
-    # riconosci tipo carburante dagli argomenti ("/prezzi gasolio")
     for carb in CARBURANTI_VALIDI:
-        if carb.lower() in args:
-            cfg["carburante"] = carb
-            break
+        if carb.lower() in args: cfg["carburante"] = carb
+    if "servito" in args: cfg["self_service"] = False
+    elif "self" in args: cfg["self_service"] = True
 
-    # riconosci modalità self / servito
-    if "servito" in args:
-        cfg["self_service"] = False
-    elif "self" in args:
-        cfg["self_service"] = True
+    await genera_e_invia_report(context.bot, chat_id, cfg)
 
-    modo = "self-service" if cfg["self_service"] else "servito"
-    wait_msg = await update.message.reply_text(
-        f"🔄 Recupero prezzi *{cfg['carburante']}* ({modo})…",
-        parse_mode=ParseMode.MARKDOWN,
-    )
-
-    try:
-        testo = await genera_report(cfg)
-        await wait_msg.edit_text(testo, parse_mode=ParseMode.MARKDOWN)
-    except RuntimeError as e:
-        log.error("Errore dati in cmd_prezzi: %s", e)
-        await wait_msg.edit_text(
-            f"⚠️ *Dati non disponibili*\n\n`{e}`\n\n"
-            "Riprova tra qualche minuto.",
-            parse_mode=ParseMode.MARKDOWN,
+async def handle_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Gestisce i click sui pulsanti del menu testuale."""
+    text = update.message.text
+    if text == "⛽ Prezzi Vicini":
+        await cmd_prezzi(update, context)
+    elif text == "⚙️ Impostazioni":
+        cfg = get_user_cfg(update.effective_chat.id)
+        modo = "Self" if cfg["self_service"] else "Servito"
+        await update.message.reply_text(
+            "⚙️ *Le tue Preferenze*\n\n"
+            f"⛽ Carburante: `{cfg['carburante']}`\n"
+            f"🛠 Modalità: `{modo}`\n"
+            f"📏 Raggio: `{cfg['raggio_km']} km`\n"
+            f"⏰ Report: `{cfg['orario_invio']}`\n\n"
+            "_Per ora usa i comandi per cambiare (es. /prezzi gasolio)_",
+            parse_mode=ParseMode.MARKDOWN
         )
-    except Exception as e:
-        log.error("Errore inatteso in cmd_prezzi: %s", e, exc_info=True)
-        await wait_msg.edit_text(
-            f"❌ *Errore inatteso:* `{type(e).__name__}: {e}`",
-            parse_mode=ParseMode.MARKDOWN,
-        )
+    elif text == "📖 Aiuto":
+        await cmd_help(update, context)
+
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -602,19 +555,43 @@ async def cmd_prezzi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 # ══════════════════════════════════════════════════════════════════
 
 async def job_report_mattutino(context: CallbackContext) -> None:
-    log.info("⏰ Job mattutino avviato")
-    await genera_e_invia_report(context.bot, CONFIG["chat_id"], CONFIG)
+    """Invia il report mattutino a TUTTI gli utenti registrati nel DB."""
+    all_users = db.get_all_users()
+    log.info("⏰ Job mattutino: invio a %d utenti", len(all_users))
+    
+    for user_data in all_users:
+        chat_id = user_data["chat_id"]
+        cfg = get_user_cfg(chat_id)
+        if cfg["lat"] == 0: continue # Salta utenti senza posizione
+        
+        try:
+            await genera_e_invia_report(context.bot, chat_id, cfg)
+        except Exception as e:
+            log.error("Errore invio report a %s: %s", chat_id, e)
 
 # ══════════════════════════════════════════════════════════════════
 #  MAIN / CLI MODE
 # ══════════════════════════════════════════════════════════════════
 
 async def run_once():
-    """Modalità singola per GitHub Actions."""
+    """Modalità singola per GitHub Actions (usa il primo utente o variabile d'ambiente)."""
     from telegram import Bot
-    bot = Bot(token=CONFIG["bot_token"])
+    token = os.environ.get("BOT_TOKEN", "")
+    chat_id = os.environ.get("CHAT_ID", "")
+    
+    if not token or not chat_id:
+        log.error("BOT_TOKEN e CHAT_ID necessari per run_once")
+        return
+
+    bot = Bot(token=token)
+    cfg = get_user_cfg(int(chat_id))
+    # Se il DB è vuoto per questo chat_id, usa i default di env
+    if cfg["lat"] == 0:
+        cfg["lat"] = float(os.environ.get("LAT", 0))
+        cfg["lon"] = float(os.environ.get("LON", 0))
+
     async with bot:
-        await genera_e_invia_report(bot, CONFIG["chat_id"], CONFIG)
+        await genera_e_invia_report(bot, int(chat_id), cfg)
 
 def main() -> None:
     # Gestione modalità CLI
@@ -623,20 +600,18 @@ def main() -> None:
         asyncio.run(run_once())
         return
 
-    token = CONFIG["bot_token"]
-
-    # Validazione token
-    if not token or "INCOLLA" in token or len(token) < 20:
-        print("⚠️  Imposta il BOT_TOKEN prima di avviare!")
-        print("   • Modifica CONFIG['bot_token'] nello script, oppure")
-        print("   • Esporta la variabile d'ambiente: set BOT_TOKEN=il_tuo_token")
+    if not BOT_TOKEN or len(BOT_TOKEN) < 20:
+        print("⚠️  Imposta BOT_TOKEN nel file .env!")
         raise SystemExit(1)
 
-    print("🤖 Bot Benzina v2.0 — avvio in corso...")
-    print(f"   Posizione: {CONFIG['lat']}, {CONFIG['lon']}")
-    print(f"   Raggio: {CONFIG['raggio_km']} km | Carburante: {CONFIG['carburante']}")
-    print(f"   Report automatico alle: {CONFIG['orario_invio']} (ora italiana)")
-    print("   Premi Ctrl+C per fermare.\n")
+    print("\n" + "═"*45)
+    print("  🚀  BOT BENZINA SaaS v3.0  🚀")
+    print("═"*45)
+    print("  Database: SQLite (bot_data.db)")
+    print("  Status:   Multi-user enabled")
+    print("═"*45)
+    print("  Bot in ascolto... premi Ctrl+C per uscire.\n")
+
 
     # Costruisce l'applicazione con job_queue abilitata
     app = (
@@ -645,12 +620,16 @@ def main() -> None:
         .build()
     )
 
-    # Registra i command handler
+    # Registra i handler
     app.add_handler(CommandHandler("start",      cmd_start))
     app.add_handler(CommandHandler("help",       cmd_help))
-    app.add_handler(CommandHandler("info",       cmd_info))
     app.add_handler(CommandHandler("carburanti", cmd_carburanti))
     app.add_handler(CommandHandler("prezzi",     cmd_prezzi))
+    
+    # Handler SaaS
+    app.add_handler(MessageHandler(filters.LOCATION, handle_location))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_menu))
+
 
     # Scheduler: report mattutino automatico
     orario = CONFIG["orario_invio"]
@@ -672,53 +651,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-# ══════════════════════════════════════════════════════════════════
-#  ISTRUZIONI GITHUB ACTIONS (invio automatico gratuito)
-# ══════════════════════════════════════════════════════════════════
-#
-#  Con GitHub Actions il bot gira su server remoto senza tenere
-#  il PC acceso. Invio automatico mattutino senza lo scheduler:
-#
-#  1. Crea un repo PRIVATO su GitHub
-#  2. Salva questo file come bot_benzina.py nella root del repo
-#  3. Crea .github/workflows/benzina.yml:
-#
-#     name: Bot Benzina
-#     on:
-#       schedule:
-#         - cron: '0 6 * * 1-5'   # Lun-Ven alle 08:00 (UTC+2 = cron 06:00)
-#       workflow_dispatch:          # avvio manuale dalla UI GitHub
-#     jobs:
-#       run:
-#         runs-on: ubuntu-latest
-#         steps:
-#           - uses: actions/checkout@v4
-#           - uses: actions/setup-python@v5
-#             with: { python-version: '3.11' }
-#           - name: Installa dipendenze
-#             run: pip install "python-telegram-bot[job-queue]==20.7" requests pandas pytz -q
-#           - name: Invia report benzina
-#             run: |
-#               python - <<'EOF'
-#               import asyncio, os, sys
-#               sys.path.insert(0, '.')
-#               from bot_benzina import genera_report, CONFIG
-#               from telegram import Bot
-#               from telegram.constants import ParseMode
-#               async def main():
-#                   cfg = dict(CONFIG)
-#                   testo = await genera_report(cfg)
-#                   bot = Bot(token=cfg["bot_token"])
-#                   async with bot:
-#                       await bot.send_message(chat_id=cfg["chat_id"], text=testo, parse_mode=ParseMode.MARKDOWN)
-#               asyncio.run(main())
-#               EOF
-#             env:
-#               BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-#               CHAT_ID:   ${{ secrets.CHAT_ID }}
-#
-#  4. In Settings → Secrets → Actions aggiungi:
-#       BOT_TOKEN → il tuo token da @BotFather
-#       CHAT_ID   → il tuo ID da @userinfobot
