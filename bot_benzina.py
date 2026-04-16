@@ -543,10 +543,14 @@ def verify_telegram_init_data(init_data: str) -> dict:
 async def web_api_prices(request):
     """Endpoint che restituisce i prezzi JSON per la Web App (Stateless)."""
     try:
-        init_data = request.query.get('initData')
+        # Tenta di prendere initData dalla query o dall'header Authorization (più robusto per iOS)
+        init_data = request.query.get('initData') or request.headers.get('Authorization')
+        
         user = verify_telegram_init_data(init_data)
         
-        if not user or not user.get('id'):
+        if not user:
+            # Log silenzioso per non intasare, ma utile per noi
+            log.warning("Accesso negato: initData mancante o non valido.")
             return web.json_response({"error": "Unauthorized"}, status=401)
         
         # Legge i parametri direttamente dalla query string inviata dal frontend

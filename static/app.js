@@ -106,8 +106,12 @@ async function fetchData(lat, lon) {
     const initData = tg.initData;
 
     try {
+        if (!initData) {
+            alert("⚠️ Per favore, apri questa Dashboard direttamente dal tasto nel Bot di Telegram!");
+            return;
+        }
+
         const query = new URLSearchParams({
-            initData: initData,
             lat: lat,
             lon: lon,
             carburante: userSettings.carburante,
@@ -118,6 +122,7 @@ async function fetchData(lat, lon) {
         const response = await fetch(`${BACKEND_URL}/api/prices?${query}`, {
             method: 'GET',
             headers: {
+                'Authorization': initData,
                 'ngrok-skip-browser-warning': 'true',
                 'X-Requested-With': 'XMLHttpRequest'
             }
