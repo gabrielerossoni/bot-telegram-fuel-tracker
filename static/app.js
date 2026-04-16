@@ -119,36 +119,41 @@ function renderDashboard(stations) {
     const listContainer = document.getElementById('ranking-list');
     listContainer.innerHTML = '';
     
-    // Pulisce marker precedenti
     markers.forEach(m => map.removeLayer(m));
     markers = [];
 
     if (stations.length === 0) {
-        listContainer.innerHTML = '<p class="empty-msg">Nessun distributore trovato in zona.</p>';
+        listContainer.innerHTML = '<p class="empty-msg">Nessun distributore trovato.</p>';
         return;
     }
 
+    // Identifica il prezzo minimo per evidenziarlo
+    const minPrice = Math.min(...stations.map(s => s.prezzo));
+
     stations.forEach((st, index) => {
-        // 1. Aggiunge Marker sulla mappa
+        const isCheapest = st.prezzo === minPrice;
+        const markerColor = isCheapest ? "#22c55e" : "#38bdf8";
+
+        // 1. Marker a forma di "Price Tag"
         const marker = L.marker([st._lat, st._lon], {
             icon: L.divIcon({
-                className: 'custom-div-icon',
-                html: `<div style="background-color:#38bdf8; width:12px; height:12px; border-radius:50%; border:2px solid white;"></div>`,
-                iconSize: [12, 12],
-                iconAnchor: [6, 6]
+                className: 'price-tag-icon',
+                html: `<div class="marker-pin ${isCheapest ? 'cheapest' : ''}">${st.prezzo.toFixed(2)}</div>`,
+                iconSize: [40, 30],
+                iconAnchor: [20, 30]
             })
         }).addTo(map);
         
         marker.bindPopup(`<b>${st.nome_impianto}</b><br>${st.prezzo.toFixed(3)} €/L`);
         markers.push(marker);
 
-        // 2. Crea Card per la lista
+        // 2. Card
         const card = document.createElement('div');
-        card.className = 'station-card';
+        card.className = `station-card ${isCheapest ? 'border-glow' : ''}`;
         card.innerHTML = `
             <div class="card-info">
                 <div class="card-price">
-                    <span class="price-val">${st.prezzo.toFixed(3)}</span>
+                    <span class="price-val ${isCheapest ? 'text-green' : ''}">${st.prezzo.toFixed(3)}</span>
                     <span class="unit">€/L</span>
                 </div>
                 <div class="card-meta">${st.bandiera.toUpperCase()}</div>
@@ -156,12 +161,10 @@ function renderDashboard(stations) {
             </div>
             <div class="card-actions">
                 <span class="dist-badge">📍 ${st.distanza_km.toFixed(1)} km</span>
-                <a href="https://www.google.com/maps/search/?api=1&query=${st._lat},${st._lon}" 
-                   target="_blank" class="nav-round-btn" onclick="event.stopPropagation()">↗️</a>
+                <button class="nav-round-btn" onclick="openNav(${st._lat}, ${st._lon}, event)">↗️</button>
             </div>
         `;
         
-        // Clic sulla card -> Vai al marker
         card.onclick = () => {
             map.flyTo([st._lat, st._lon], 16, { duration: 1.5 });
             marker.openPopup();
@@ -170,12 +173,22 @@ function renderDashboard(stations) {
         listContainer.appendChild(card);
     });
 
-    // Fit automatico del primo distributore se presente
     if (markers.length > 0) {
         const group = new L.featureGroup([...markers, userMarker]);
         map.fitBounds(group.getBounds().pad(0.2));
     }
 }
+
+// Funzione globale per aprire la navigazione
+window.openNav = function(lat, lon, event) {
+    if(event) event.stopPropagation();
+    const url = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
+    if (tg.openLink) {
+        tg.openLink(url);
+    } else {
+        window.open(url, '_blank');
+    }
+};
 
 function showStatus(msg) {
     const loader = document.getElementById('loader');
