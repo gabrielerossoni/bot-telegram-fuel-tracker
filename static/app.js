@@ -17,7 +17,7 @@ const apiParam = urlParams.get('api');
 
 const BACKEND_URL = apiParam 
     ? apiParam 
-    : (window.location.origin.includes('github.io') ? 'https://unraked-uneverted-aline.ngrok-free.dev' : '');
+    : (window.location.origin.includes('github.io') ? 'https://bot-telegram-fuel-tracker-production.up.railway.app' : '');
 
 tg.expand();
 tg.ready();

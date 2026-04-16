@@ -4,4 +4,3 @@ pandas
 pytz
 aiohttp
 python-dotenv
-# matplotlib (removed for premium UI)
