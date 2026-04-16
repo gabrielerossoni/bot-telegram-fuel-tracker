@@ -688,10 +688,10 @@ def main() -> None:
             except: pass
 
     print("\n" + "═"*45)
-    print("  🚀  BOT BENZINA SaaS v3.1  🚀")
+    print("  🚀  BOT BENZINA Stateless v4.0  🚀")
     print("═"*45)
     print("  Dashboard: http://localhost:8080")
-    print("  Status:    Premium UI & Mini App")
+    print("  Status:    On-Demand & No Database")
     print("═"*45)
 
     # Costruisce l'applicazione
