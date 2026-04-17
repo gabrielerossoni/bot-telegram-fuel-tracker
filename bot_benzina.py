@@ -714,8 +714,26 @@ async def on_startup(app: Application):
     # Forza la cancellazione di eventuali webhook per evitare conflitti ghost
     await app.bot.delete_webhook(drop_pending_updates=True)
     
+    # Notifica l'avvio all'utente per debug (se CHAT_ID è presente)
+    owner_id = os.environ.get("CHAT_ID")
+    if owner_id:
+        try:
+            await app.bot.send_message(
+                chat_id=int(owner_id),
+                text=f"🚀 Bot avviato! Istanza: `[{INSTANCE_ID}]`",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except: pass
+
     # Conserviamo il runner nell'app bot_data per evitare garbage collection
     app.bot_data['_web_runner'] = await start_web_server()
+
+    # RITARDO DI AVVIO PER RAILWAY (Zero Downtime Deployment)
+    # Avviamo il web server subito (per il Health Check), ma aspettiamo 
+    # a dare l'OK finale a Telegram per evitare Conflitti con la vecchia versione.
+    log.info(f"[{INSTANCE_ID}] ⏳ Attesa 15 secondi per il passaggio di consegne su Railway...")
+    await asyncio.sleep(15)
+    log.info(f"[{INSTANCE_ID}] ✅ Passaggio completato, il bot ora è pronto.")
     
     # Imposta il Menu Button (quello a sinistra del campo testo)
     url = os.environ.get("WEBAPP_URL")
@@ -769,6 +787,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.LOCATION, handle_location))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_menu))
 
+    # Avvio polling
     app.run_polling(drop_pending_updates=True)
 
 
