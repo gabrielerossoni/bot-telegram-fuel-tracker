@@ -40,6 +40,9 @@ GITHUB ACTIONS (invio automatico gratuito senza lasciare il PC acceso)
 from dotenv import load_dotenv
 load_dotenv()
 
+import sys
+import subprocess
+
 # ══════════════════════════════════════════════════════════════════
 #  IMPORT
 # ══════════════════════════════════════════════════════════════════
