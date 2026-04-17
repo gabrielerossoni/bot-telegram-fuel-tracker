@@ -88,6 +88,9 @@ logging.getLogger("telegram").setLevel(logging.ERROR)
 
 log = logging.getLogger("bot")
 
+# Path assoluto del progetto (fondamentale per Railway)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # ID Univoco per identificare l'istanza nei log di Railway
 INSTANCE_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
 
@@ -595,7 +598,10 @@ async def web_api_prices(request):
 
 async def web_index(request):
     """Serve l'interfaccia della Web App (ora in root)."""
-    return web.FileResponse('index.html')
+    path = os.path.join(BASE_DIR, 'index.html')
+    if not os.path.exists(path):
+        return web.Response(text="index.html non trovato nel server", status=404)
+    return web.FileResponse(path)
 
 async def web_health(request):
     """Health check per Railway."""
@@ -629,17 +635,20 @@ async def start_web_server():
     app.router.add_get('/health', web_health)
     app.router.add_get('/api/prices', web_api_prices)
     
-    # Serve i file statici dalla cartella 'static'
-    app.router.add_static('/static', path='static', name='static')
+    # Serve i file statici dalla cartella 'static' usando path assoluto
+    static_path = os.path.join(BASE_DIR, 'static')
+    app.router.add_static('/static', path=static_path, name='static')
     
-    runner = web.AppRunner(app)
+    runner = web.AppRunner(app, access_log=log)
     await runner.setup()
     port = int(os.environ.get("PORT", "8080"))
-    log.info(f"[{INSTANCE_ID}] 🚀 Tentativo di avvio server su porta {port}")
-    site = web.TCPSite(runner, '0.0.0.0', port)
+    log.info(f"[{INSTANCE_ID}] 🚀 Tentativo di avvio server su porta {port}...")
+    
+    # host=None permette il binding su tutte le interfacce (IPv4/IPv6)
+    site = web.TCPSite(runner, host=None, port=port)
     await site.start()
-    log.info(f"[{INSTANCE_ID}] 🌐 Web App Server attivo sulla porta {port} (Health Check: /health)")
-    return runner # Lo restituiamo per evitare garbage collection
+    log.info(f"[{INSTANCE_ID}] 🌐 Web App Server ONLINE sulla porta {port} (Health Check: /health)")
+    return runner
 
 
 
