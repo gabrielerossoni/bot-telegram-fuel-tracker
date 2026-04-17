@@ -711,6 +711,9 @@ async def run_once():
 
 async def on_startup(app: Application):
     """Callback eseguito all'avvio del bot."""
+    # Forza la cancellazione di eventuali webhook per evitare conflitti ghost
+    await app.bot.delete_webhook(drop_pending_updates=True)
+    
     # Conserviamo il runner nell'app bot_data per evitare garbage collection
     app.bot_data['_web_runner'] = await start_web_server()
     
