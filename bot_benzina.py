@@ -147,6 +147,13 @@ CARBURANTI_VALIDI = [
 
 TZ_ROMA = pytz.timezone("Europe/Rome")
 
+# Cache globale in memoria per evitare di bloccare il loop
+_CACHE = {
+    "data": None,      # tuple (ana_df, pre_df)
+    "timestamp": None  # datetime dell'ultimo aggiornamento
+}
+_CACHE_TTL_MIN = 360   # Cache valida per 6 ore (i dati MASE cambiano una volta al giorno)
+
 # ══════════════════════════════════════════════════════════════════
 #  FUNZIONI DATI
 # ══════════════════════════════════════════════════════════════════
@@ -162,19 +169,23 @@ def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
-def _fetch_csv(url: str) -> bytes:
-    """Scarica il CSV in memoria senza salvare su disco."""
-    headers = {"User-Agent": "Mozilla/5.0 (BotBenzina/2.0; +github.com/bot-benzina)"}
+async def _fetch_csv_async(url: str) -> bytes:
+    """Scarica il CSV in modo asincrono per non bloccare il bot."""
+    headers = {"User-Agent": "Mozilla/5.0 (BotBenzina/4.0; +github.com/bot-benzina)"}
     try:
-        r = requests.get(url, headers=headers, timeout=30)
-        r.raise_for_status()
-        if "text/html" in r.headers.get("Content-Type", "").lower():
-            raise ValueError("Risposta HTML invece di CSV")
-        if len(r.content) < 5_000:
-            raise ValueError("File troppo piccolo — sito MASE probabilmente offline")
-        return r.content
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, timeout=30) as r:
+                r.raise_for_status()
+                # Verifica se è HTML (errore comune del sito MASE)
+                if "text/html" in r.headers.get("Content-Type", "").lower():
+                    raise ValueError("Risposta HTML invece di CSV")
+                content = await r.read()
+                if len(content) < 5_000:
+                    raise ValueError("File troppo piccolo — sito MASE probabilmente offline")
+                return content
     except Exception as e:
-        log.error("Download fallito da %s: %s", url, e)
+        log.error("Download asincrono fallito da %s: %s", url, e)
         raise RuntimeError(f"Impossibile scaricare dati MASE: {e}") from e
 
 
@@ -199,13 +210,31 @@ def _parse_csv(raw: bytes) -> pd.DataFrame:
     return df
 
 
-def scarica_dati() -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Scarica e parsa anagrafica e prezzi dal MASE direttamente in memoria."""
-    raw_ana = _fetch_csv(URL_ANAGRAFICA)
-    raw_pre = _fetch_csv(URL_PREZZI)
-    ana = _parse_csv(raw_ana)
-    pre = _parse_csv(raw_pre)
-    log.info("Dati caricati in memoria: %d impianti, %d prezzi", len(ana), len(pre))
+async def scarica_dati_async() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Scarica e parsa anagrafica e prezzi MASE in modo asincrono con cache."""
+    ora_attuale = datetime.now()
+    
+    # 1. Verifica cache
+    if (_CACHE["data"] and _CACHE["timestamp"] and 
+        (ora_attuale - _CACHE["timestamp"]).total_seconds() < _CACHE_TTL_MIN * 60):
+        return _CACHE["data"]
+
+    # 2. Download asincrono (parallelo)
+    import asyncio
+    log.info("☁️ Inizio download dati MASE (asincrono)...")
+    raw_ana, raw_pre = await asyncio.gather(
+        _fetch_csv_async(URL_ANAGRAFICA),
+        _fetch_csv_async(URL_PREZZI)
+    )
+
+    # 3. Parsing (in thread per non bloccare la CPU del bot)
+    ana = await asyncio.to_thread(_parse_csv, raw_ana)
+    pre = await asyncio.to_thread(_parse_csv, raw_pre)
+    
+    _CACHE["data"] = (ana, pre)
+    _CACHE["timestamp"] = ora_attuale
+    
+    log.info("✅ Dati MASE aggiornati e messi in cache: %d impianti, %d prezzi", len(ana), len(pre))
     return ana, pre
 
 
@@ -373,8 +402,11 @@ def genera_messaggio_premium(top_stazioni: pd.DataFrame, cfg: dict, data_str: st
 async def genera_e_invia_report(bot, chat_id, cfg):
     """Pipeline completa: scarica, elabora e invia il report interattivo."""
     try:
-        anagrafica, prezzi = scarica_dati()
-        stazioni = trova_stazioni_vicine(anagrafica, prezzi, cfg)
+        # Usa la versione asincrona per non bloccare il bot
+        anagrafica, prezzi = await scarica_dati_async()
+        
+        # Elaborazione Pandas (punto critico CPU: usiamo thread se serve, ma per pochi km è veloce)
+        stazioni = await asyncio.to_thread(trova_stazioni_vicine, anagrafica, prezzi, cfg)
         
         data_str = datetime.now(TZ_ROMA).strftime("%d/%m")
         
@@ -533,8 +565,8 @@ async def web_api_prices(request):
         if cfg["lat"] == 0:
             return web.json_response({"error": "Posizione non impostata"}, status=400)
             
-        anagrafica, prezzi = scarica_dati()
-        stazioni = trova_stazioni_vicine(anagrafica, prezzi, cfg)
+        anagrafica, prezzi = await scarica_dati_async()
+        stazioni = await asyncio.to_thread(trova_stazioni_vicine, anagrafica, prezzi, cfg)
         
         stations_list = []
         for _, row in stazioni.head(30).iterrows():
