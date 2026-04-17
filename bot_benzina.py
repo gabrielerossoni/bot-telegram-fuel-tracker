@@ -46,6 +46,7 @@ import subprocess
 # ══════════════════════════════════════════════════════════════════
 #  IMPORT
 # ══════════════════════════════════════════════════════════════════
+import asyncio
 import io
 import logging
 import math
