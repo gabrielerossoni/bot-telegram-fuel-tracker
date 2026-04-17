@@ -36,35 +36,6 @@ GITHUB ACTIONS (invio automatico gratuito senza lasciare il PC acceso)
 # ══════════════════════════════════════════════════════════════════
 #  INSTALLAZIONE AUTOMATICA (utile su Colab)
 # ══════════════════════════════════════════════════════════════════
-import subprocess, sys
-
-# Forza UTF-8 sull'output: evita crash con emoji su terminali Windows (cp1252)
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-
-# Mappa: nome pacchetto pip → nome modulo importabile
-# (non sempre coincidono, es. "python-telegram-bot" si importa come "telegram")
-_DEPS = [
-    ("python-telegram-bot[job-queue]==20.7", "telegram"),
-    ("requests",                             "requests"),
-    ("pandas",                               "pandas"),
-    ("pytz",                                 "pytz"),
-    ("python-dotenv",                        "dotenv"),
-]
-
-def _install(pkg: str) -> None:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", pkg, "-q"],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-import importlib
-for _pkg, _mod in _DEPS:
-    try:
-        importlib.import_module(_mod)
-    except ImportError:
-        print(f"[install] {_pkg}...")
-        _install(_pkg)
-        importlib.invalidate_caches()
-
 # Carica variabili da .env (se presente) — non fa nulla se il file manca
 from dotenv import load_dotenv
 load_dotenv()
@@ -585,6 +556,10 @@ async def web_index(request):
     """Serve l'interfaccia della Web App (ora in root)."""
     return web.FileResponse('index.html')
 
+async def web_health(request):
+    """Health check per Railway."""
+    return web.Response(text="OK", status=200)
+
 @web.middleware
 async def cors_middleware(request, handler):
     """Aggiunge header CORS ultra-permissivi per risolvere il 'Failed to fetch'."""
@@ -610,6 +585,7 @@ async def start_web_server():
     """Avvia il server web aiohttp in background."""
     app = web.Application(middlewares=[cors_middleware])
     app.router.add_get('/', web_index) 
+    app.router.add_get('/health', web_health)
     app.router.add_get('/api/prices', web_api_prices)
     
     # Serve i file statici dalla cartella 'static'
@@ -620,7 +596,8 @@ async def start_web_server():
     port = int(os.environ.get("PORT", "8080"))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    log.info("🌐 Web App Server attivo sulla porta %d", port)
+    log.info("🌐 Web App Server attivo sulla porta %d (Health Check: /health)", port)
+    return runner # Lo restituiamo per evitare garbage collection
 
 
 
@@ -692,7 +669,8 @@ async def run_once():
 
 async def on_startup(app: Application):
     """Callback eseguito all'avvio del bot."""
-    await start_web_server()
+    # Conserviamo il runner nell'app bot_data per evitare garbage collection
+    app.bot_data['_web_runner'] = await start_web_server()
     
     # Imposta il Menu Button (quello a sinistra del campo testo)
     url = os.environ.get("WEBAPP_URL")
