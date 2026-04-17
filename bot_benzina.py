@@ -50,6 +50,8 @@ import asyncio
 import io
 import logging
 import math
+import random
+import string
 import os
 import hmac
 import hashlib
@@ -85,6 +87,9 @@ logging.getLogger("apscheduler").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.ERROR)
 
 log = logging.getLogger("bot")
+
+# ID Univoco per identificare l'istanza nei log di Railway
+INSTANCE_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
 
 # ══════════════════════════════════════════════════════════════════
 #  CONFIGURAZIONE
@@ -630,9 +635,10 @@ async def start_web_server():
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", "8080"))
+    log.info(f"[{INSTANCE_ID}] 🚀 Tentativo di avvio server su porta {port}")
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    log.info("🌐 Web App Server attivo sulla porta %d (Health Check: /health)", port)
+    log.info(f"[{INSTANCE_ID}] 🌐 Web App Server attivo sulla porta {port} (Health Check: /health)")
     return runner # Lo restituiamo per evitare garbage collection
 
 
@@ -737,9 +743,9 @@ def main() -> None:
             except: pass
 
     print("\n" + "═"*45)
-    print("  🚀  BOT BENZINA Stateless v4.0  🚀")
+    print(f"  🚀  BOT BENZINA Stateless v4.0 [{INSTANCE_ID}] 🚀")
     print("═"*45)
-    print("  Dashboard: http://localhost:8080")
+    print(f"  Porta:     {os.environ.get('PORT', '8080')}")
     print("  Status:    On-Demand & No Database")
     print(f"  Web App:   {os.environ.get('WEBAPP_URL', 'NON IMPOSTATO')}")
     print("═"*45)
