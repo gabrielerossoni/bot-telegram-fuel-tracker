@@ -397,7 +397,8 @@ def genera_messaggio_premium(top_stazioni: pd.DataFrame, cfg: dict, data_str: st
         
         # Pulsanti navigazione per i primi 3
         if i < 3:
-            maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+            # Format con pin preciso e nome stazione
+            maps_url = f"https://www.google.com/maps/dir/?api=1&destination={lat},{lon}"
             buttons.append([InlineKeyboardButton(f"📍 Vai da {brand} (#{i+1})", url=maps_url)])
 
     return "\n".join(testo), buttons

@@ -205,7 +205,8 @@ function renderDashboard(stations) {
 // Funzione globale per aprire la navigazione
 window.openNav = function(lat, lon, event) {
     if(event) event.stopPropagation();
-    const url = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
+    // Usa il formato 'dir' per avviare direttamente la navigazione verso le coordinate esatte
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}`;
     if (tg.openLink) {
         tg.openLink(url);
     } else {
