@@ -41,11 +41,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import sys
-import subprocess
 
-# ══════════════════════════════════════════════════════════════════
-#  IMPORT
-# ══════════════════════════════════════════════════════════════════
 import asyncio
 import io
 import logging
@@ -56,17 +52,15 @@ import os
 import hmac
 import hashlib
 import json
-from datetime import datetime, time as dtime
+from datetime import datetime
 
 import pandas as pd
 import pytz
-import requests
 from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo, MenuButtonWebApp
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
-    CallbackContext,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -88,10 +82,10 @@ logging.getLogger("telegram").setLevel(logging.ERROR)
 
 log = logging.getLogger("bot")
 
-# Path assoluto del progetto (fondamentale per Railway)
+# Path assoluto del progetto
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# ID Univoco per identificare l'istanza nei log di Railway
+# ID Univoco per identificare l'istanza nei log
 INSTANCE_ID = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
 
 # ══════════════════════════════════════════════════════════════════
@@ -107,7 +101,6 @@ DEFAULT_CONFIG = {
     "carburante":   "Benzina",
     "self_service": True,
     "soglia_alert": 1.55,
-    "orario_invio": "08:00",
 }
 
 def get_user_cfg(params: dict = None) -> dict:
@@ -180,13 +173,13 @@ def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 async def _fetch_csv_async(url: str) -> bytes:
     """Scarica il CSV in modo asincrono per non bloccare il bot."""
+    import aiohttp
     headers = {"User-Agent": "Mozilla/5.0 (BotBenzina/4.0; +github.com/bot-benzina)"}
+    timeout = aiohttp.ClientTimeout(total=30)
     try:
-        import aiohttp
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, timeout=30) as r:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, headers=headers) as r:
                 r.raise_for_status()
-                # Verifica se è HTML (errore comune del sito MASE)
                 if "text/html" in r.headers.get("Content-Type", "").lower():
                     raise ValueError("Risposta HTML invece di CSV")
                 content = await r.read()
@@ -194,7 +187,7 @@ async def _fetch_csv_async(url: str) -> bytes:
                     raise ValueError("File troppo piccolo — sito MASE probabilmente offline")
                 return content
     except Exception as e:
-        log.error("Download asincrono fallito da %s: %s", url, e)
+        log.error("Download fallito da %s: %s", url, e)
         raise RuntimeError(f"Impossibile scaricare dati MASE: {e}") from e
 
 
@@ -229,8 +222,7 @@ async def scarica_dati_async() -> tuple[pd.DataFrame, pd.DataFrame]:
         return _CACHE["data"]
 
     # 2. Download asincrono (parallelo)
-    import asyncio
-    log.info("☁️ Inizio download dati MASE (asincrono)...")
+    log.info("☁️ Inizio download dati MASE...")
     raw_ana, raw_pre = await asyncio.gather(
         _fetch_csv_async(URL_ANAGRAFICA),
         _fetch_csv_async(URL_PREZZI)
@@ -455,12 +447,15 @@ async def genera_e_invia_report(bot, chat_id, cfg):
 #  HANDLER TELEGRAM — rispondono ai comandi dell'utente
 # ══════════════════════════════════════════════════════════════════
 
-MAIN_MENU = ReplyKeyboardMarkup([
+_webapp_url = os.environ.get("WEBAPP_URL", "").strip()
+_main_menu_rows = [
     [KeyboardButton("⛽ Prezzi Vicini")],
-    [KeyboardButton("🚀 Apri Dashboard", web_app=WebAppInfo(url=os.environ.get("WEBAPP_URL", "")))],
     [KeyboardButton("📍 Invia Posizione", request_location=True)],
     [KeyboardButton("⚙️ Impostazioni"), KeyboardButton("📖 Aiuto")]
-], resize_keyboard=True)
+]
+if _webapp_url and _webapp_url.startswith("http"):
+    _main_menu_rows.insert(1, [KeyboardButton("🚀 Apri Dashboard", web_app=WebAppInfo(url=_webapp_url))])
+MAIN_MENU = ReplyKeyboardMarkup(_main_menu_rows, resize_keyboard=True)
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/start — messaggio di benvenuto."""
@@ -548,10 +543,10 @@ def verify_telegram_init_data(init_data: str) -> dict:
         secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
         calculated_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
         
-        if calculated_hash == hash_check:
+        if hmac.compare_digest(calculated_hash, hash_check):
             return json.loads(params.get('user', '{}'))
         else:
-            log.warning("Hash mismatch: previsto %s, ricevuto %s", calculated_hash, hash_check)
+            log.warning("Hash Telegram non valido")
     except Exception as e:
         log.error("Errore validazione TWA: %s", e)
     return None
@@ -605,7 +600,7 @@ async def web_index(request):
     return web.FileResponse(path)
 
 async def web_health(request):
-    """Health check per Railway."""
+    """Health check endpoint."""
     return web.Response(text="OK", status=200)
 
 @web.middleware
@@ -721,10 +716,8 @@ async def run_once():
 
 async def on_startup(app: Application):
     """Callback eseguito all'avvio del bot."""
-    # Forza la cancellazione di eventuali webhook per evitare conflitti ghost
     await app.bot.delete_webhook(drop_pending_updates=True)
-    
-    # Notifica l'avvio all'utente per debug (se CHAT_ID è presente)
+
     owner_id = os.environ.get("CHAT_ID")
     if owner_id:
         try:
@@ -735,26 +728,23 @@ async def on_startup(app: Application):
             )
         except: pass
 
-    # Conserviamo il runner nell'app bot_data per evitare garbage collection
     app.bot_data['_web_runner'] = await start_web_server()
 
-    # RITARDO DI AVVIO PER RAILWAY (Zero Downtime Deployment)
-    # Avviamo il web server subito (per il Health Check), ma aspettiamo 
-    # a dare l'OK finale a Telegram per evitare Conflitti con la vecchia versione.
-    log.info(f"[{INSTANCE_ID}] ⏳ Attesa 15 secondi per il passaggio di consegne su Railway...")
-    await asyncio.sleep(15)
-    log.info(f"[{INSTANCE_ID}] ✅ Passaggio completato, il bot ora è pronto.")
-    
-    # Imposta il Menu Button (quello a sinistra del campo testo)
-    url = os.environ.get("WEBAPP_URL")
-    if url:
+    log.info(f"[{INSTANCE_ID}] ⏳ Attesa 10 secondi per il passaggio di consegne...")
+    await asyncio.sleep(10)
+    log.info(f"[{INSTANCE_ID}] ✅ Bot pronto.")
+
+    url = os.environ.get("WEBAPP_URL", "").strip()
+    if url and url.startswith("http"):
         try:
             await app.bot.set_chat_menu_button(
                 menu_button=MenuButtonWebApp(text="Mappa", web_app=WebAppInfo(url=url))
             )
-            log.info("✅ Menu Button configurato con successo")
+            log.info("✅ Menu Button configurato: %s", url)
         except Exception as e:
-            log.error("❌ Errore configurazione Menu Button: %s", e)
+            log.error("❌ Errore Menu Button: %s", e)
+    else:
+        log.warning("⚠️ WEBAPP_URL non configurato o non valido. Menu Button NON impostato. WEBAPP_URL='%s'", url)
 
 def main() -> None:
     # Gestione modalità CLI

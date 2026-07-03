@@ -1,48 +1,52 @@
-# ⛽ Bot Benzina Stateless v4.0 🚀
+# ⛽ Bot Benzina Stateless v4.0
 
-Un bot Telegram professionale per trovare i prezzi dei carburanti più economici intorno a te.
+Un bot Telegram per trovare i prezzi dei carburanti più economici intorno a te.
 
-**Questa versione è 100% Stateless**: non usa database (niente SQLite/Postgres). Le preferenze e la posizione sono salvate direttamente nel telefono dell'utente (localStorage) per la massima privacy e facilità di hosting.
+**100% Stateless**: niente database. Le preferenze restano nel telefono dell'utente (localStorage).
 
-## ✨ Caratteristiche
+## Caratteristiche
 
-- 📍 **Privacy Totale**: Il server non salva nulla. I tuoi dati restano sul tuo dispositivo.
-- 🚀 **Mini App Intelligente**: Dashboard con mappa che ricorda le tue preferenze (tipo carburante, raggio) localmente.
-- 🛰 **Fast GPS**: Accedi alla posizione in tempo reale direttamente dalla Mini App.
-- 💎 **Premium UI**: Report eleganti in chat con link diretti a Google Maps.
-- ☁️ **Cloud Native**: Caricabile su Render, Railway, Vercel o qualsiasi host Python senza configurazioni di database.
+- Privacy totale — il server non salva nulla
+- Mini App con mappa Leaflet e preferenze locali
+- Report eleganti con link a Google Maps
+- Dati ufficiali MASE aggiornati quotidianamente
+- Deploy con Docker in un solo comando
 
-## 🛠 Installazione Rapida
+## Deploy con Docker
 
 ```bash
-pip install -r requirements.txt
-python bot_benzina.py
+chmod +x start.sh
+./start.sh
 ```
 
-## 🌐 Variabili Ambiente (.env)
+Lo script installa Docker (se serve), clona il repo e avvia il container.
+
+Oppure manualmente:
+
+```bash
+docker compose up -d --build
+```
+
+## Variabili Ambiente (.env)
 
 ```env
 BOT_TOKEN=il_tuo_token_qui
-WEBAPP_URL=https://tuo-utente.github.io/tuo-repo  # Se usi GitHub Pages
+WEBAPP_URL=https://la-tua-url        # URL pubblico HTTPS della WebApp
+PORT=8080                             # Porta del server (default 8080)
 ```
 
-## 🚀 Deployment (Frontend su GitHub Pages)
+## Struttura
 
-Questa versione supporta il **decoupling**: puoi ospitare la Mini App su GitHub Pages e il bot su un server separato.
-
-1. **Backend (Bot)**: Ospita `bot_benzina.py` su Render/Railway/VPS. Il server ha il supporto **CORS** attivo per dialogare con GitHub.
-2. **Frontend (Mini App)**: Carica `index.html` nella root di GitHub Pages e mantieni `app.js` e `style.css` nella cartella `static/`.
-
-## 📁 Struttura
-
-- `bot_benzina.py`: Logica bot e API.
-- `index.html`: Entry point Web App (in root per GitHub Pages).
-- `static/`: Contiene `app.js` e `style.css`.
+- `bot_benzina.py` — logica bot e API server
+- `index.html` — WebApp entry point
+- `static/app.js` — frontend mappa e dashboard
+- `static/style.css` — stili
+- `Dockerfile` + `docker-compose.yml` — deploy Docker
 
 ---
 
 *Niente database. Niente complicazioni. Solo risparmio.*
 
-## 📄 Licenza
+## Licenza
 
-Progetto coperto da Copyright (c) 2026 Gabriele Rossoni. Tutti i diritti riservati.
+Copyright (c) 2026 Gabriele Rossoni. Tutti i diritti riservati.

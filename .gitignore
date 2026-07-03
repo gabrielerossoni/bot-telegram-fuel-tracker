@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 venv/
+.venv/
 .env
 .history
 anagrafica_cache.csv
@@ -15,3 +16,6 @@ report_*.png
 # IDEs
 .vscode/
 .idea/
+
+# Build
+.dist/
