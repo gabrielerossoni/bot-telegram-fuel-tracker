@@ -17,14 +17,12 @@ else
     echo "[1/4] Docker OK."
 fi
 
-# --- 2. cloudflared ---
-if ! command -v cloudflared &> /dev/null; then
-    echo "[2/4] Installazione cloudflared..."
-    curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /tmp/cloudflared
-    sudo mv /tmp/cloudflared /usr/local/bin/cloudflared
-    chmod +x /usr/local/bin/cloudflared
+# --- 2. Tailscale ---
+if ! command -v tailscale &> /dev/null; then
+    echo "[2/4] Installazione Tailscale..."
+    curl -fsSL https://tailscale.com/install.sh | sh
 else
-    echo "[2/4] cloudflared OK."
+    echo "[2/4] Tailscale OK."
 fi
 
 # --- 3. Codice ---
@@ -43,91 +41,51 @@ if [ ! -f .env ]; then
     cp .env.example .env
     echo ""
     echo "================================================"
-    echo "  Apri .env e inserisci BOT_TOKEN:"
+    echo "  Compila il file .env:"
     echo "  nano $INSTALL_DIR/.env"
+    echo ""
+    echo "  Inserisci:"
+    echo "  - BOT_TOKEN (da @BotFather)"
+    echo "  - WEBAPP_URL (lo vedrai dopo il login Tailscale)"
     echo "================================================"
     read -p "Premi INVIO quando hai compilato .env..."
 fi
 
-# --- 5. Servizio cloudflared ---
-if [ ! -f /etc/systemd/system/cloudflared.service ]; then
-    echo "[4/4] Configurazione tunnel HTTPS..."
-    sudo tee /etc/systemd/system/cloudflared.service > /dev/null << 'EOF'
-[Unit]
-Description=Cloudflare Tunnel
-After=network.target docker.service
-
-[Service]
-ExecStart=/usr/local/bin/cloudflared tunnel --url http://localhost:8080
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    sudo systemctl daemon-reload
-    sudo systemctl enable cloudflared
-fi
-
-# --- 6. Avvia bot ---
-echo "Avvio bot..."
-cd "$INSTALL_DIR"
-docker compose up -d --build
-
-# Aspetta che il bot sia pronto
-echo "Attendo che il bot risponda..."
-for i in $(seq 1 30); do
-    if curl -s http://localhost:8080/health > /dev/null 2>&1; then
-        break
-    fi
-    sleep 1
-done
-
-# --- 7. Avvia tunnel e cattura URL ---
-echo "Avvio tunnel HTTPS..."
-sudo systemctl restart cloudflared
-
-echo "Attendo URL del tunnel..."
-TUNNEL_URL=""
-for i in $(seq 1 30); do
-    sleep 2
-    TUNNEL_URL=$(sudo journalctl -u cloudflared --no-pager -n 50 2>/dev/null | grep -oP 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' | head -1 || true)
-    if [ -n "$TUNNEL_URL" ]; then
-        break
-    fi
-done
-
-if [ -z "$TUNNEL_URL" ]; then
+# --- 5. Avvia Tailscale ---
+if ! tailscale status &> /dev/null; then
     echo ""
-    echo "[ERRORE] URL del tunnel non trovato."
-    echo "Prova manualmente:"
-    echo "  sudo journalctl -u cloudflared -f"
-    echo "  Cerca la riga con https://xxx.trycloudflare.com"
-    exit 1
+    echo "================================================"
+    echo "  Login Tailscale (apri il link che appare)"
+    echo "================================================"
+    sudo tailscale up --hostname=botbenzina
 fi
+
+# Ottieni URL
+TAILSCALE_HOSTNAME=$(tailscale status --json | grep -oP '"Self":\s*\{[^}]*"HostName":\s*"([^"]+)"' | grep -oP '"HostName":\s*"\K[^"]+' || tailscale status | head -2 | tail -1 | awk '{print $2}')
+TAILSCALE_URL="https://${TAILSCALE_HOSTNAME}"
 
 echo ""
 echo "================================================"
-echo "  TUNNEL TROVATO: $TUNNEL_URL"
+echo "  Il tuo URL fisso: $TAILSCALE_URL"
+echo ""
+echo "  Assicurati che nel .env ci sia:"
+echo "  WEBAPP_URL=$TAILSCALE_URL"
 echo "================================================"
 
-# Aggiorna .env con l'URL
-sed -i "s|^WEBAPP_URL=.*|WEBAPP_URL=$TUNNEL_URL|" .env
+# Aggiorna .env
+sed -i "s|^WEBAPP_URL=.*|WEBAPP_URL=$TAILSCALE_URL|" .env
 
-# Riavvia il bot con il nuovo URL
-echo "Riavvio bot con URL corretto..."
-docker compose down && docker compose up -d --build
+# --- 6. Avvia bot ---
+echo "Avvio bot..."
+docker compose down 2>/dev/null || true
+docker compose up -d --build
 
 echo ""
 echo "================================================"
 echo "  TUTTO ATTIVO!"
 echo ""
-echo "  Bot:      docker compose logs -f"
-echo "  Tunnel:   sudo journalctl -u cloudflared -f"
-echo "  Stop:     docker compose down"
-echo "            sudo systemctl stop cloudflared"
+echo "  URL: $TAILSCALE_URL"
 echo ""
-echo "  URL: $TUNNEL_URL"
+echo "  Il bot si riavvia da solo al boot."
+echo "  Per vedere i log: docker compose logs -f"
 echo "================================================"
